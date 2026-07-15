@@ -37,19 +37,26 @@ struct EnumerationFailure {
     message: &'static str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnumerationSuccess {
+    snapshots: Vec<AdapterSnapshot>,
+    messages: Vec<CollectionMessage>,
+}
+
 pub fn collect_gpus() -> GpuCollectionResult {
     let started = Instant::now();
     build_result(platform::enumerate_adapters(), elapsed_ms(started))
 }
 
 fn build_result(
-    snapshots: Result<Vec<AdapterSnapshot>, EnumerationFailure>,
+    enumeration: Result<EnumerationSuccess, EnumerationFailure>,
     duration_ms: u64,
 ) -> GpuCollectionResult {
-    match snapshots {
-        Ok(snapshots) => {
+    match enumeration {
+        Ok(enumeration) => {
             let mut fields = Vec::new();
-            let collection = snapshots
+            let collection = enumeration
+                .snapshots
                 .into_iter()
                 .enumerate()
                 .map(|(index, snapshot)| map_adapter(snapshot, index, &mut fields))
@@ -59,13 +66,13 @@ fn build_result(
                 collection: Some(collection),
                 status: CollectorResult {
                     name: CollectorName::Gpu,
-                    status: if fields.is_empty() {
+                    status: if fields.is_empty() && enumeration.messages.is_empty() {
                         CollectorStatus::Success
                     } else {
                         CollectorStatus::Partial
                     },
                     duration_ms,
-                    messages: vec![],
+                    messages: enumeration.messages,
                     fields,
                 },
             }
@@ -248,7 +255,7 @@ fn elapsed_ms(started: Instant) -> u64 {
 mod platform {
     use std::mem::size_of;
 
-    use pcdiag_core::GpuAdapterType;
+    use pcdiag_core::{CollectionMessage, GpuAdapterType};
     use windows::Win32::Devices::DeviceAndDriverInstallation::{
         DIGCF_PRESENT, DN_STARTED, GUID_DEVCLASS_DISPLAY, HDEVINFO, SP_DEVINFO_DATA,
         SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
@@ -267,7 +274,7 @@ mod platform {
     use windows::Win32::System::Time::FileTimeToSystemTime;
     use windows::core::PCWSTR;
 
-    use super::{AdapterSnapshot, EnumerationFailure};
+    use super::{AdapterSnapshot, EnumerationFailure, EnumerationSuccess};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct DeviceDetails {
@@ -288,11 +295,21 @@ mod platform {
         }
     }
 
-    pub(super) fn enumerate_adapters() -> Result<Vec<AdapterSnapshot>, EnumerationFailure> {
+    pub(super) fn enumerate_adapters() -> Result<EnumerationSuccess, EnumerationFailure> {
         // SAFETY: CreateDXGIFactory1 initializes and returns an owned COM interface.
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }
             .map_err(|error| windows_failure("dxgi_factory_creation_failed", error))?;
-        let device_details = enumerate_device_details().unwrap_or_default();
+        let (device_details, mut messages) = match enumerate_device_details() {
+            Ok(result) => result,
+            Err(error) => (
+                vec![],
+                vec![setup_message(
+                    "setupapi_device_enumeration_failed",
+                    Some(i64::from(error.code().0)),
+                    "SetupAPIで表示デバイスを列挙できませんでした".into(),
+                )],
+            ),
+        };
         let mut snapshots = Vec::new();
 
         for index in 0.. {
@@ -339,10 +356,15 @@ mod platform {
             });
         }
 
-        Ok(snapshots)
+        messages.shrink_to_fit();
+        Ok(EnumerationSuccess {
+            snapshots,
+            messages,
+        })
     }
 
-    fn enumerate_device_details() -> windows::core::Result<Vec<DeviceDetails>> {
+    fn enumerate_device_details()
+    -> windows::core::Result<(Vec<DeviceDetails>, Vec<CollectionMessage>)> {
         // SAFETY: The class GUID and flags are valid; no parent window or enumerator is required.
         let info = DeviceInfoSet(unsafe {
             SetupDiGetClassDevsW(
@@ -353,6 +375,7 @@ mod platform {
             )?
         });
         let mut devices = Vec::new();
+        let mut messages = Vec::new();
 
         for index in 0.. {
             let mut data = SP_DEVINFO_DATA {
@@ -367,8 +390,16 @@ mod platform {
                 Err(error) => return Err(error),
             }
 
-            let Some(luid) = property_luid(info.0, &data, &DEVPKEY_Device_AdapterLuid) else {
-                continue;
+            let luid = match property_luid(info.0, &data, &DEVPKEY_Device_AdapterLuid) {
+                Ok(luid) => luid,
+                Err(native_code) => {
+                    messages.push(setup_message(
+                        "setupapi_adapter_luid_unavailable",
+                        native_code,
+                        format!("表示デバイスのAdapter LUIDを取得できませんでした (index={index})"),
+                    ));
+                    continue;
+                }
             };
             let status = property_u32(info.0, &data, &DEVPKEY_Device_DevNodeStatus);
 
@@ -382,15 +413,19 @@ mod platform {
             });
         }
 
-        Ok(devices)
+        Ok((devices, messages))
     }
 
-    fn property_bytes(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<Vec<u8>> {
+    fn property_bytes(
+        info: HDEVINFO,
+        data: &SP_DEVINFO_DATA,
+        key: &DEVPROPKEY,
+    ) -> Result<Vec<u8>, Option<i64>> {
         let mut property_type = DEVPROPTYPE::default();
         let mut required_size = 0;
 
         // SAFETY: The first call intentionally supplies no buffer to obtain its required size.
-        let _ = unsafe {
+        let size_result = unsafe {
             SetupDiGetDevicePropertyW(
                 info,
                 data,
@@ -402,12 +437,12 @@ mod platform {
             )
         };
         if required_size == 0 {
-            return None;
+            return Err(size_result.err().map(|error| i64::from(error.code().0)));
         }
 
         let mut buffer = vec![0; required_size as usize];
         // SAFETY: The buffer has the size reported by SetupDiGetDevicePropertyW.
-        unsafe {
+        let result = unsafe {
             SetupDiGetDevicePropertyW(
                 info,
                 data,
@@ -417,14 +452,14 @@ mod platform {
                 Some(&mut required_size),
                 0,
             )
-        }
-        .ok()?;
+        };
+        result.map_err(|error| Some(i64::from(error.code().0)))?;
         buffer.truncate(required_size as usize);
-        Some(buffer)
+        Ok(buffer)
     }
 
     fn property_string(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
-        let bytes = property_bytes(info, data, key)?;
+        let bytes = property_bytes(info, data, key).ok()?;
         let utf16: Vec<_> = bytes
             .chunks_exact(2)
             .map(|value| u16::from_le_bytes([value[0], value[1]]))
@@ -435,7 +470,7 @@ mod platform {
     }
 
     fn property_u32(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<u32> {
-        let bytes = property_bytes(info, data, key)?;
+        let bytes = property_bytes(info, data, key).ok()?;
         Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
     }
 
@@ -443,16 +478,23 @@ mod platform {
         info: HDEVINFO,
         data: &SP_DEVINFO_DATA,
         key: &DEVPROPKEY,
-    ) -> Option<(u32, i32)> {
+    ) -> Result<(u32, i32), Option<i64>> {
         let bytes = property_bytes(info, data, key)?;
-        Some((
-            u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),
-            i32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?),
-        ))
+        let low = bytes
+            .get(..4)
+            .and_then(|value| value.try_into().ok())
+            .map(u32::from_le_bytes)
+            .ok_or(None)?;
+        let high = bytes
+            .get(4..8)
+            .and_then(|value| value.try_into().ok())
+            .map(i32::from_le_bytes)
+            .ok_or(None)?;
+        Ok((low, high))
     }
 
     fn property_date(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
-        let bytes = property_bytes(info, data, key)?;
+        let bytes = property_bytes(info, data, key).ok()?;
         let file_time = FILETIME {
             dwLowDateTime: u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),
             dwHighDateTime: u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?),
@@ -465,6 +507,14 @@ mod platform {
             "{:04}-{:02}-{:02}",
             system_time.wYear, system_time.wMonth, system_time.wDay
         ))
+    }
+
+    fn setup_message(code: &str, native_code: Option<i64>, message: String) -> CollectionMessage {
+        CollectionMessage {
+            code: code.into(),
+            native_code,
+            message: Some(message),
+        }
     }
 
     fn adapter_type(flags: u32) -> GpuAdapterType {
@@ -488,9 +538,9 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use super::{AdapterSnapshot, EnumerationFailure};
+    use super::{EnumerationFailure, EnumerationSuccess};
 
-    pub(super) fn enumerate_adapters() -> Result<Vec<AdapterSnapshot>, EnumerationFailure> {
+    pub(super) fn enumerate_adapters() -> Result<EnumerationSuccess, EnumerationFailure> {
         Err(EnumerationFailure {
             code: "platform_not_supported",
             native_code: None,
@@ -505,7 +555,7 @@ mod tests {
 
     #[test]
     fn maps_dxgi_adapter_to_the_shared_gpu_model() {
-        let result = build_result(Ok(vec![snapshot()]), 2);
+        let result = build_result(success(vec![snapshot()]), 2);
         let gpu = &result.collection.as_ref().unwrap()[0];
 
         assert_eq!(result.status.status, CollectorStatus::Partial);
@@ -526,10 +576,32 @@ mod tests {
 
     #[test]
     fn successful_empty_enumeration_is_not_a_failure() {
-        let result = build_result(Ok(vec![]), 1);
+        let result = build_result(success(vec![]), 1);
 
         assert_eq!(result.collection, Some(vec![]));
         assert_eq!(result.status.status, CollectorStatus::Success);
+    }
+
+    #[test]
+    fn setupapi_messages_are_preserved_in_the_collector_result() {
+        let result = build_result(
+            Ok(EnumerationSuccess {
+                snapshots: vec![],
+                messages: vec![CollectionMessage {
+                    code: "setupapi_device_enumeration_failed".into(),
+                    native_code: Some(-1),
+                    message: Some("failed".into()),
+                }],
+            }),
+            1,
+        );
+
+        assert_eq!(result.status.status, CollectorStatus::Partial);
+        assert_eq!(result.status.messages.len(), 1);
+        assert_eq!(
+            result.status.messages[0].code,
+            "setupapi_device_enumeration_failed"
+        );
     }
 
     #[test]
@@ -541,7 +613,7 @@ mod tests {
         adapter.enabled = Some(true);
         adapter.problem_code = Some(0);
 
-        let result = build_result(Ok(vec![adapter]), 3);
+        let result = build_result(success(vec![adapter]), 3);
         let gpu = &result.collection.as_ref().unwrap()[0];
 
         assert_eq!(result.status.status, CollectorStatus::Success);
@@ -570,7 +642,7 @@ mod tests {
     fn non_pci_identifier_is_recorded_as_an_invalid_value() {
         let mut adapter = snapshot();
         adapter.vendor_id = 0x1_0000;
-        let result = build_result(Ok(vec![adapter]), 1);
+        let result = build_result(success(vec![adapter]), 1);
 
         assert_eq!(result.collection.unwrap()[0].pci.vendor_id, None);
         assert!(result.status.fields.iter().any(|field| {
@@ -596,5 +668,12 @@ mod tests {
             enabled: None,
             problem_code: None,
         }
+    }
+
+    fn success(snapshots: Vec<AdapterSnapshot>) -> Result<EnumerationSuccess, EnumerationFailure> {
+        Ok(EnumerationSuccess {
+            snapshots,
+            messages: vec![],
+        })
     }
 }
