@@ -21,3 +21,8 @@ target
 #.idea/
 
 .DS_Store
+
+# Real-machine verification files may contain sensitive information
+/test-results/**
+!/test-results/windows/
+!/test-results/windows/.gitkeep
