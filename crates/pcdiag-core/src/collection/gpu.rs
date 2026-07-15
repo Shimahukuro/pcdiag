@@ -9,12 +9,22 @@ pub struct Gpu {
     pub name: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub vendor: Option<String>,
+    pub adapter_type: GpuAdapterType,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub device_instance_id: Option<String>,
     pub pci: GpuPciIdentifiers,
     pub memory: GpuMemory,
     pub driver: GpuDriver,
     pub device_state: GpuDeviceState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GpuAdapterType {
+    Hardware,
+    Software,
+    Remote,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use pcdiag_core::{
     CollectionMessage, CollectorName, CollectorResult, CollectorStatus, FieldCollectionResult,
-    FieldCollectionStatus, Gpu, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers,
+    FieldCollectionStatus, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory,
+    GpuPciIdentifiers,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,7 @@ struct AdapterSnapshot {
     dedicated_video_bytes: u64,
     dedicated_system_bytes: u64,
     shared_system_bytes: u64,
+    adapter_type: GpuAdapterType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +119,7 @@ fn map_adapter(
     Gpu {
         name: nonempty(snapshot.name),
         vendor,
+        adapter_type: snapshot.adapter_type,
         device_instance_id: None,
         pci: GpuPciIdentifiers {
             vendor_id,
@@ -210,7 +213,11 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 #[cfg(windows)]
 mod platform {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, DXGI_ERROR_NOT_FOUND, IDXGIFactory1};
+    use pcdiag_core::GpuAdapterType;
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_REMOTE, DXGI_ADAPTER_FLAG_SOFTWARE,
+        DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
+    };
 
     use super::{AdapterSnapshot, EnumerationFailure};
 
@@ -248,10 +255,21 @@ mod platform {
                 dedicated_video_bytes: description.DedicatedVideoMemory as u64,
                 dedicated_system_bytes: description.DedicatedSystemMemory as u64,
                 shared_system_bytes: description.SharedSystemMemory as u64,
+                adapter_type: adapter_type(description.Flags),
             });
         }
 
         Ok(snapshots)
+    }
+
+    fn adapter_type(flags: u32) -> GpuAdapterType {
+        if flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+            GpuAdapterType::Software
+        } else if flags & DXGI_ADAPTER_FLAG_REMOTE.0 as u32 != 0 {
+            GpuAdapterType::Remote
+        } else {
+            GpuAdapterType::Hardware
+        }
     }
 
     fn windows_failure(code: &'static str, error: windows::core::Error) -> EnumerationFailure {
@@ -289,6 +307,7 @@ mod tests {
         assert_eq!(result.status.duration_ms, 2);
         assert_eq!(gpu.name.as_deref(), Some("Example GPU"));
         assert_eq!(gpu.vendor.as_deref(), Some("NVIDIA"));
+        assert_eq!(gpu.adapter_type, GpuAdapterType::Hardware);
         assert_eq!(gpu.pci.vendor_id, Some(0x10DE));
         assert_eq!(gpu.memory.dedicated_video_bytes, Some(8_589_934_592));
         assert!(
@@ -347,6 +366,7 @@ mod tests {
             dedicated_video_bytes: 8_589_934_592,
             dedicated_system_bytes: 0,
             shared_system_bytes: 34_210_639_872,
+            adapter_type: GpuAdapterType::Hardware,
         }
     }
 }

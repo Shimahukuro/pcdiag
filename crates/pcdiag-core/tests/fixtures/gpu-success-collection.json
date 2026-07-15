@@ -18,6 +18,7 @@
     {
       "name": "Example GPU",
       "vendor": "Example Vendor",
+      "adapter_type": "hardware",
       "device_instance_id": "PCI\\VEN_1234&DEV_5678&SUBSYS_00000000&REV_01\\TEST",
       "pci": {
         "vendor_id": 4660,

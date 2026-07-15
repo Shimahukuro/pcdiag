@@ -6,8 +6,8 @@ pub mod status;
 pub mod validation;
 
 pub use collection::{
-    Collection, CommitMemory, Gpu, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers,
-    MemoryCollection, PhysicalMemory, VirtualMemory,
+    Collection, CommitMemory, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory,
+    GpuPciIdentifiers, MemoryCollection, PhysicalMemory, VirtualMemory,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,

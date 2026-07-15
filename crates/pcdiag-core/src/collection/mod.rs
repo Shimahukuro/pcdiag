@@ -1,7 +1,7 @@
 mod gpu;
 mod memory;
 
-pub use gpu::{Gpu, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
+pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
 
 use serde::{Deserialize, Serialize};
