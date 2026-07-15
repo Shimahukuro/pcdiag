@@ -23,6 +23,11 @@ struct AdapterSnapshot {
     dedicated_system_bytes: u64,
     shared_system_bytes: u64,
     adapter_type: GpuAdapterType,
+    device_instance_id: Option<String>,
+    driver_version: Option<String>,
+    driver_date: Option<String>,
+    enabled: Option<bool>,
+    problem_code: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,25 +107,42 @@ fn map_adapter(
         );
     }
 
-    for (suffix, code) in [
-        ("device_instance_id", "device_instance_id_unavailable"),
-        ("driver/version", "driver_version_unavailable"),
-        ("driver/date", "driver_date_unavailable"),
-        ("device_state/problem_code", "problem_code_unavailable"),
-    ] {
-        unavailable(
-            fields,
-            format!("{base}/{suffix}"),
-            code,
-            FieldCollectionStatus::Unsupported,
-        );
-    }
+    record_missing(
+        &snapshot.device_instance_id,
+        fields,
+        format!("{base}/device_instance_id"),
+        "device_instance_id_unavailable",
+    );
+    record_missing(
+        &snapshot.driver_version,
+        fields,
+        format!("{base}/driver/version"),
+        "driver_version_unavailable",
+    );
+    record_missing(
+        &snapshot.driver_date,
+        fields,
+        format!("{base}/driver/date"),
+        "driver_date_unavailable",
+    );
+    record_missing(
+        &snapshot.enabled,
+        fields,
+        format!("{base}/device_state/enabled"),
+        "device_enabled_state_unavailable",
+    );
+    record_missing(
+        &snapshot.problem_code,
+        fields,
+        format!("{base}/device_state/problem_code"),
+        "problem_code_unavailable",
+    );
 
     Gpu {
         name: nonempty(snapshot.name),
         vendor,
         adapter_type: snapshot.adapter_type,
-        device_instance_id: None,
+        device_instance_id: snapshot.device_instance_id,
         pci: GpuPciIdentifiers {
             vendor_id,
             device_id,
@@ -133,14 +155,25 @@ fn map_adapter(
             shared_system_bytes: Some(snapshot.shared_system_bytes),
         },
         driver: GpuDriver {
-            version: None,
-            date: None,
+            version: snapshot.driver_version,
+            date: snapshot.driver_date,
         },
         device_state: GpuDeviceState {
             present: Some(true),
-            enabled: Some(true),
-            problem_code: None,
+            enabled: snapshot.enabled,
+            problem_code: snapshot.problem_code,
         },
+    }
+}
+
+fn record_missing<T>(
+    value: &Option<T>,
+    fields: &mut Vec<FieldCollectionResult>,
+    path: String,
+    code: &str,
+) {
+    if value.is_none() {
+        unavailable(fields, path, code, FieldCollectionStatus::SourceNull);
     }
 }
 
@@ -213,18 +246,53 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 #[cfg(windows)]
 mod platform {
+    use std::mem::size_of;
+
     use pcdiag_core::GpuAdapterType;
+    use windows::Win32::Devices::DeviceAndDriverInstallation::{
+        DIGCF_PRESENT, DN_STARTED, GUID_DEVCLASS_DISPLAY, HDEVINFO, SP_DEVINFO_DATA,
+        SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+        SetupDiGetDevicePropertyW,
+    };
+    use windows::Win32::Devices::Display::DEVPKEY_Device_AdapterLuid;
+    use windows::Win32::Devices::Properties::{
+        DEVPKEY_Device_DevNodeStatus, DEVPKEY_Device_DriverDate, DEVPKEY_Device_DriverVersion,
+        DEVPKEY_Device_InstanceId, DEVPKEY_Device_ProblemCode, DEVPROPTYPE,
+    };
+    use windows::Win32::Foundation::{DEVPROPKEY, ERROR_NO_MORE_ITEMS, FILETIME, SYSTEMTIME};
     use windows::Win32::Graphics::Dxgi::{
         CreateDXGIFactory1, DXGI_ADAPTER_FLAG_REMOTE, DXGI_ADAPTER_FLAG_SOFTWARE,
         DXGI_ERROR_NOT_FOUND, IDXGIFactory1,
     };
+    use windows::Win32::System::Time::FileTimeToSystemTime;
+    use windows::core::PCWSTR;
 
     use super::{AdapterSnapshot, EnumerationFailure};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct DeviceDetails {
+        luid: (u32, i32),
+        device_instance_id: Option<String>,
+        driver_version: Option<String>,
+        driver_date: Option<String>,
+        enabled: Option<bool>,
+        problem_code: Option<u32>,
+    }
+
+    struct DeviceInfoSet(HDEVINFO);
+
+    impl Drop for DeviceInfoSet {
+        fn drop(&mut self) {
+            // SAFETY: The handle was returned by SetupDiGetClassDevsW and is released once.
+            let _ = unsafe { SetupDiDestroyDeviceInfoList(self.0) };
+        }
+    }
 
     pub(super) fn enumerate_adapters() -> Result<Vec<AdapterSnapshot>, EnumerationFailure> {
         // SAFETY: CreateDXGIFactory1 initializes and returns an owned COM interface.
         let factory: IDXGIFactory1 = unsafe { CreateDXGIFactory1() }
             .map_err(|error| windows_failure("dxgi_factory_creation_failed", error))?;
+        let device_details = enumerate_device_details().unwrap_or_default();
         let mut snapshots = Vec::new();
 
         for index in 0.. {
@@ -245,6 +313,13 @@ mod platform {
                 .iter()
                 .position(|character| *character == 0)
                 .unwrap_or(description.Description.len());
+            let details = device_details.iter().find(|details| {
+                details.luid
+                    == (
+                        description.AdapterLuid.LowPart,
+                        description.AdapterLuid.HighPart,
+                    )
+            });
 
             snapshots.push(AdapterSnapshot {
                 name: String::from_utf16_lossy(&description.Description[..name_end]),
@@ -256,10 +331,140 @@ mod platform {
                 dedicated_system_bytes: description.DedicatedSystemMemory as u64,
                 shared_system_bytes: description.SharedSystemMemory as u64,
                 adapter_type: adapter_type(description.Flags),
+                device_instance_id: details.and_then(|value| value.device_instance_id.clone()),
+                driver_version: details.and_then(|value| value.driver_version.clone()),
+                driver_date: details.and_then(|value| value.driver_date.clone()),
+                enabled: details.and_then(|value| value.enabled),
+                problem_code: details.and_then(|value| value.problem_code),
             });
         }
 
         Ok(snapshots)
+    }
+
+    fn enumerate_device_details() -> windows::core::Result<Vec<DeviceDetails>> {
+        // SAFETY: The class GUID and flags are valid; no parent window or enumerator is required.
+        let info = DeviceInfoSet(unsafe {
+            SetupDiGetClassDevsW(
+                Some(&GUID_DEVCLASS_DISPLAY),
+                PCWSTR::null(),
+                None,
+                DIGCF_PRESENT,
+            )?
+        });
+        let mut devices = Vec::new();
+
+        for index in 0.. {
+            let mut data = SP_DEVINFO_DATA {
+                cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+                ..Default::default()
+            };
+
+            // SAFETY: The device info set is valid and data has the required initialized size.
+            match unsafe { SetupDiEnumDeviceInfo(info.0, index, &mut data) } {
+                Ok(()) => {}
+                Err(error) if error.code() == ERROR_NO_MORE_ITEMS.to_hresult() => break,
+                Err(error) => return Err(error),
+            }
+
+            let Some(luid) = property_luid(info.0, &data, &DEVPKEY_Device_AdapterLuid) else {
+                continue;
+            };
+            let status = property_u32(info.0, &data, &DEVPKEY_Device_DevNodeStatus);
+
+            devices.push(DeviceDetails {
+                luid,
+                device_instance_id: property_string(info.0, &data, &DEVPKEY_Device_InstanceId),
+                driver_version: property_string(info.0, &data, &DEVPKEY_Device_DriverVersion),
+                driver_date: property_date(info.0, &data, &DEVPKEY_Device_DriverDate),
+                enabled: status.map(|status| status & DN_STARTED.0 != 0),
+                problem_code: property_u32(info.0, &data, &DEVPKEY_Device_ProblemCode),
+            });
+        }
+
+        Ok(devices)
+    }
+
+    fn property_bytes(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<Vec<u8>> {
+        let mut property_type = DEVPROPTYPE::default();
+        let mut required_size = 0;
+
+        // SAFETY: The first call intentionally supplies no buffer to obtain its required size.
+        let _ = unsafe {
+            SetupDiGetDevicePropertyW(
+                info,
+                data,
+                key,
+                &mut property_type,
+                None,
+                Some(&mut required_size),
+                0,
+            )
+        };
+        if required_size == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0; required_size as usize];
+        // SAFETY: The buffer has the size reported by SetupDiGetDevicePropertyW.
+        unsafe {
+            SetupDiGetDevicePropertyW(
+                info,
+                data,
+                key,
+                &mut property_type,
+                Some(buffer.as_mut_slice()),
+                Some(&mut required_size),
+                0,
+            )
+        }
+        .ok()?;
+        buffer.truncate(required_size as usize);
+        Some(buffer)
+    }
+
+    fn property_string(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
+        let bytes = property_bytes(info, data, key)?;
+        let utf16: Vec<_> = bytes
+            .chunks_exact(2)
+            .map(|value| u16::from_le_bytes([value[0], value[1]]))
+            .take_while(|value| *value != 0)
+            .collect();
+        let value = String::from_utf16(&utf16).ok()?;
+        (!value.is_empty()).then_some(value)
+    }
+
+    fn property_u32(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<u32> {
+        let bytes = property_bytes(info, data, key)?;
+        Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
+    }
+
+    fn property_luid(
+        info: HDEVINFO,
+        data: &SP_DEVINFO_DATA,
+        key: &DEVPROPKEY,
+    ) -> Option<(u32, i32)> {
+        let bytes = property_bytes(info, data, key)?;
+        Some((
+            u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),
+            i32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?),
+        ))
+    }
+
+    fn property_date(info: HDEVINFO, data: &SP_DEVINFO_DATA, key: &DEVPROPKEY) -> Option<String> {
+        let bytes = property_bytes(info, data, key)?;
+        let file_time = FILETIME {
+            dwLowDateTime: u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?),
+            dwHighDateTime: u32::from_le_bytes(bytes.get(4..8)?.try_into().ok()?),
+        };
+        let mut system_time = SYSTEMTIME::default();
+
+        // SAFETY: Both structures are valid and fully initialized.
+        unsafe { FileTimeToSystemTime(&file_time, &mut system_time) }.ok()?;
+        Some(format!(
+            "{:04}-{:02}-{:02}",
+            system_time.wYear, system_time.wMonth, system_time.wDay
+        ))
     }
 
     fn adapter_type(flags: u32) -> GpuAdapterType {
@@ -328,6 +533,24 @@ mod tests {
     }
 
     #[test]
+    fn setupapi_details_complete_the_gpu_result() {
+        let mut adapter = snapshot();
+        adapter.device_instance_id = Some("PCI\\VEN_10DE&DEV_2684\\TEST".into());
+        adapter.driver_version = Some("32.0.15.1234".into());
+        adapter.driver_date = Some("2026-07-15".into());
+        adapter.enabled = Some(true);
+        adapter.problem_code = Some(0);
+
+        let result = build_result(Ok(vec![adapter]), 3);
+        let gpu = &result.collection.as_ref().unwrap()[0];
+
+        assert_eq!(result.status.status, CollectorStatus::Success);
+        assert!(result.status.fields.is_empty());
+        assert_eq!(gpu.driver.version.as_deref(), Some("32.0.15.1234"));
+        assert_eq!(gpu.device_state.problem_code, Some(0));
+    }
+
+    #[test]
     fn enumeration_failure_produces_null_collection_and_a_reason() {
         let result = build_result(
             Err(EnumerationFailure {
@@ -367,6 +590,11 @@ mod tests {
             dedicated_system_bytes: 0,
             shared_system_bytes: 34_210_639_872,
             adapter_type: GpuAdapterType::Hardware,
+            device_instance_id: None,
+            driver_version: None,
+            driver_date: None,
+            enabled: None,
+            problem_code: None,
         }
     }
 }
