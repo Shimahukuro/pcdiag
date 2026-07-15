@@ -5,7 +5,10 @@ pub mod diagnosis;
 pub mod status;
 pub mod validation;
 
-pub use collection::{Collection, CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
+pub use collection::{
+    Collection, CommitMemory, Gpu, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers,
+    MemoryCollection, PhysicalMemory, VirtualMemory,
+};
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
     FindingCounts, MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus,

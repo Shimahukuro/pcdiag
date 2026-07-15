@@ -1,0 +1,44 @@
+{
+  "memory": {
+    "physical": {
+      "total_bytes": 17179869184,
+      "available_bytes": 536870912,
+      "load_percent": 97.0
+    },
+    "commit": {
+      "limit_bytes": 25769803776,
+      "available_bytes": 9126805504
+    },
+    "virtual": {
+      "total_bytes": 140737488224256,
+      "available_bytes": 140732881338368
+    }
+  },
+  "gpus": [
+    {
+      "name": "Example GPU",
+      "vendor": "Example Vendor",
+      "device_instance_id": "PCI\\VEN_1234&DEV_5678&SUBSYS_00000000&REV_01\\TEST",
+      "pci": {
+        "vendor_id": 4660,
+        "device_id": 22136,
+        "subsystem_id": 0,
+        "revision_id": 1
+      },
+      "memory": {
+        "dedicated_video_bytes": 8589934592,
+        "dedicated_system_bytes": 0,
+        "shared_system_bytes": 34210639872
+      },
+      "driver": {
+        "version": "1.2.3.4",
+        "date": "2026-07-15"
+      },
+      "device_state": {
+        "present": true,
+        "enabled": true,
+        "problem_code": 0
+      }
+    }
+  ]
+}

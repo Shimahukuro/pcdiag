@@ -40,7 +40,9 @@ pub struct VirtualMemory {
 /// Applying `deserialize_with` makes the object key mandatory while still
 /// mapping an explicit null to `None`. Serde's default `Option<T>` behavior
 /// would otherwise treat a missing key and an explicit null identically.
-fn deserialize_required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn deserialize_required_nullable<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,

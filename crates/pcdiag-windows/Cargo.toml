@@ -10,6 +10,9 @@ publish.workspace = true
 pcdiag-core.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Graphics_Dxgi",
+] }
 windows-sys = { workspace = true, features = [
     "Win32_System_ProcessStatus",
     "Win32_System_SystemInformation",

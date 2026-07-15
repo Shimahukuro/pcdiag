@@ -24,3 +24,4 @@ pcdiag-windows = { path = "crates/pcdiag-windows" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 windows-sys = "0.61.2"
+windows = "0.62.2"

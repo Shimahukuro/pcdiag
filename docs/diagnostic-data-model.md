@@ -2,7 +2,7 @@
 
 ## 目的
 
-`collection.json`、`status.json`、`diagnosis.json`を一体の診断データ契約として設計する。
+`collection.json`、`status.json`、`diagnosis.json`を一体の診断データ仕様として設計する。
 
 3ファイルは個別に完結するものではなく、次の責務を分担する。
 
@@ -75,7 +75,7 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
 
 初期スキーマで定義されたカテゴリは、収集に失敗した場合も省略しない。オブジェクト内の値を`null`とし、理由を`status.json`へ記録する。
 
-配列は正常に列挙した結果が0件なら空配列とする。列挙自体に失敗した場合の表現は、カテゴリごとの設計で決定する。
+配列は正常に列挙した結果が0件なら空配列とする。GPUの列挙自体に失敗または未実行の場合は`gpus`を`null`とし、理由を`status.json`へ記録する。
 
 ## status.json
 
@@ -473,6 +473,124 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 
 GPUでは、複数要素、配列参照、取得不能テレメトリー、ドライバー情報を使ってモデルを検証する。
 
+## GPUカテゴリ
+
+### 初期実装の対象
+
+- 複数GPUの列挙
+- GPU名とメーカー名
+- WindowsのデバイスインスタンスID
+- PCIベンダーID、デバイスID、サブシステムID、リビジョンID
+- 専用ビデオメモリ、専用システムメモリ、共有システムメモリ
+- ドライバーのバージョンと日付
+- 現在の存在、無効化状態、デバイス問題コード
+
+デバイスインスタンスIDはGPUの照合に必要な技術情報として収集する。ただし、収集バンドルを外部へ提供する前に確認すべき情報として扱う。
+
+### 初期実装の対象外
+
+- 温度、使用率、消費電力、クロック速度、ファン速度
+- GPUメーカー固有APIによる情報
+- ディスプレイおよび映像出力端子との接続関係
+- 診断閾値とGPU性能の評価
+
+これらはWindowsの標準的な情報源だけではGPU間で一貫して取得できないため、初期実装へ含めない。取得不能な項目として`null`を並べるのではなく、スキーマ自体へ定義しない。
+
+### collection.json
+
+```json
+{
+  "gpus": [
+    {
+      "name": "Example GPU",
+      "vendor": "Example Vendor",
+      "device_instance_id": "PCI\\VEN_1234&DEV_5678&SUBSYS_00000000&REV_01\\...",
+      "pci": {
+        "vendor_id": 4660,
+        "device_id": 22136,
+        "subsystem_id": 0,
+        "revision_id": 1
+      },
+      "memory": {
+        "dedicated_video_bytes": 8589934592,
+        "dedicated_system_bytes": 0,
+        "shared_system_bytes": 34210639872
+      },
+      "driver": {
+        "version": "1.2.3.4",
+        "date": "2026-07-15"
+      },
+      "device_state": {
+        "present": true,
+        "enabled": true,
+        "problem_code": 0
+      }
+    }
+  ]
+}
+```
+
+`gpus`の意味:
+
+- 1件以上: 列挙に成功し、検出したGPUを保存した。
+- 空配列: 列挙に成功したがGPUは検出されなかった。
+- `null`: 列挙に失敗した、対応していない、権限不足、または収集を実行しなかった。
+
+各GPUオブジェクトのキーは省略しない。取得できない値は`null`とし、対応するJSON Pointerと理由を`status.json`へ記録する。
+
+PCI識別子はJSON上では数値で保存する。画面やHTMLレポートでは、必要に応じて`10DE`のような4桁の16進表記へ変換する。
+
+`driver.date`は時刻を含まない日付として`YYYY-MM-DD`形式で保存する。情報源が有効な日付を返さない場合は`null`とする。
+
+### status.json
+
+GPUの列挙に成功し、一部フィールドだけ取得できなかった例:
+
+```json
+{
+  "name": "gpu",
+  "status": "partial",
+  "duration_ms": 18,
+  "messages": [],
+  "fields": [
+    {
+      "path": "/gpus/0/memory/dedicated_video_bytes",
+      "status": "unsupported",
+      "code": "dedicated_video_memory_unavailable"
+    }
+  ]
+}
+```
+
+列挙自体に失敗した場合は`gpus`を`null`とし、コレクター単位の理由を記録する。
+
+```json
+{
+  "name": "gpu",
+  "status": "failed",
+  "duration_ms": 4,
+  "messages": [
+    {
+      "code": "gpu_enumeration_failed",
+      "native_code": 5,
+      "message": "GPUを列挙できませんでした"
+    }
+  ],
+  "fields": []
+}
+```
+
+### diagnosis.json
+
+初期段階ではGPU情報の収集と表示を優先する。診断規則は、取得情報とWindows実機での差異を確認してから定義する。
+
+最初の診断候補は次のとおりとする。
+
+- Windowsがデバイス問題コードを報告している。
+- GPUは存在するが無効化されている。
+- ドライバー情報を取得できない。
+- 同一のデバイスインスタンスIDが重複している。
+
 ## 未決定事項
 
 - 診断結果の正式な重大度体系
@@ -481,6 +599,4 @@ GPUでは、複数要素、配列参照、取得不能テレメトリー、ド�
 - 診断根拠の`value`が取り得るJSON型
 - 診断条件の演算子一覧
 - 配列要素へのJSON Pointerを長期的に安定させる方法
-- コレクターが配列の列挙自体に失敗した場合の`collection.json`表現
 - メモリモジュール単位の情報を初期実装へ含めるか
-

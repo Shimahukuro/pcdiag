@@ -447,6 +447,7 @@ mod tests {
                     available_bytes: Some(140_732_881_338_368),
                 },
             },
+            gpus: Some(vec![]),
         }
     }
 
@@ -467,6 +468,7 @@ mod tests {
                     available_bytes: None,
                 },
             },
+            gpus: Some(vec![]),
         }
     }
 
