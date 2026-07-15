@@ -1,0 +1,32 @@
+{
+  "collectors": [
+    {
+      "name": "memory",
+      "status": "partial",
+      "duration_ms": 12,
+      "messages": [],
+      "fields": [
+        {
+          "path": "/memory/commit/limit_bytes",
+          "status": "source_null",
+          "code": "source_returned_null"
+        },
+        {
+          "path": "/memory/commit/available_bytes",
+          "status": "source_null",
+          "code": "source_returned_null"
+        },
+        {
+          "path": "/memory/virtual/total_bytes",
+          "status": "unsupported",
+          "code": "virtual_memory_information_unavailable"
+        },
+        {
+          "path": "/memory/virtual/available_bytes",
+          "status": "unsupported",
+          "code": "virtual_memory_information_unavailable"
+        }
+      ]
+    }
+  ]
+}

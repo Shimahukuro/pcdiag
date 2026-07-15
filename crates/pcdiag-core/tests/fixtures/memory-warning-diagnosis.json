@@ -1,0 +1,63 @@
+{
+  "rule_set": {
+    "name": "pcdiag_builtin",
+    "version": "0.1.0"
+  },
+  "summary": {
+    "overall_severity": "warning",
+    "evaluations": {
+      "passed": 0,
+      "triggered": 1,
+      "not_applicable": 0,
+      "not_evaluated": 0,
+      "failed": 0
+    },
+    "findings": {
+      "critical": 0,
+      "error": 0,
+      "warning": 1,
+      "information": 0
+    }
+  },
+  "evaluations": [
+    {
+      "rule_id": "memory.available_ratio",
+      "rule_version": "1.0",
+      "category": "memory",
+      "status": "triggered",
+      "severity": "warning",
+      "summary": "使用可能な物理メモリが少なくなっています",
+      "evidence": [
+        {
+          "kind": "collected",
+          "path": "/memory/physical/total_bytes",
+          "value": 17179869184
+        },
+        {
+          "kind": "collected",
+          "path": "/memory/physical/available_bytes",
+          "value": 536870912
+        },
+        {
+          "kind": "derived",
+          "name": "available_percent",
+          "value": 3.125,
+          "unit": "percent",
+          "source_paths": [
+            "/memory/physical/total_bytes",
+            "/memory/physical/available_bytes"
+          ]
+        }
+      ],
+      "criterion": {
+        "operator": "less_than",
+        "threshold": 10.0,
+        "unit": "percent"
+      },
+      "reason": null,
+      "recommendation": {
+        "code": "review_memory_consumption"
+      }
+    }
+  ]
+}

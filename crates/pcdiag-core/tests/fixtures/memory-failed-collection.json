@@ -1,0 +1,17 @@
+{
+  "memory": {
+    "physical": {
+      "total_bytes": null,
+      "available_bytes": null,
+      "load_percent": null
+    },
+    "commit": {
+      "limit_bytes": null,
+      "available_bytes": null
+    },
+    "virtual": {
+      "total_bytes": null,
+      "available_bytes": null
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "memory": {
+    "physical": {
+      "total_bytes": 17179869184,
+      "available_bytes": 536870912,
+      "load_percent": 97.0
+    },
+    "commit": {
+      "limit_bytes": 25769803776,
+      "available_bytes": 9126805504
+    },
+    "virtual": {
+      "total_bytes": 140737488224256,
+      "available_bytes": 140732881338368
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "collectors": [
+    {
+      "name": "memory",
+      "status": "failed",
+      "duration_ms": 3,
+      "messages": [
+        {
+          "code": "windows_api_failed",
+          "native_code": 5,
+          "message": "メモリ情報を取得できませんでした"
+        }
+      ],
+      "fields": []
+    }
+  ]
+}

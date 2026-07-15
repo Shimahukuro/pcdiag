@@ -1,14 +1,18 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Shared data contracts for pcdiag artifacts.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod collection;
+pub mod diagnosis;
+pub mod status;
+pub mod validation;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use collection::{Collection, CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
+pub use diagnosis::{
+    Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
+    FindingCounts, MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus,
+    RuleSetInfo, Severity,
+};
+pub use status::{
+    CollectionMessage, CollectionStatus, CollectorName, CollectorResult, CollectorStatus,
+    FieldCollectionResult, FieldCollectionStatus,
+};
+pub use validation::{ValidationError, ValidationErrors};
