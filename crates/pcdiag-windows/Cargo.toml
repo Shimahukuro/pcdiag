@@ -8,3 +8,12 @@ publish.workspace = true
 
 [dependencies]
 pcdiag-core.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_System_ProcessStatus",
+    "Win32_System_SystemInformation",
+] }
+
+[dev-dependencies]
+serde_json.workspace = true
