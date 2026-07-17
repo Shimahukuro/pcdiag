@@ -1,3 +1,4 @@
+mod clock;
 mod device;
 mod gpu;
 mod memory;
@@ -21,6 +22,7 @@ use self::memory::deserialize_required_nullable;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collection {
     pub windows: WindowsCollection,
+    pub clock: ClockCollection,
     pub memory: MemoryCollection,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub gpus: Option<Vec<Gpu>>,
@@ -28,4 +30,5 @@ pub struct Collection {
     pub devices: Option<Vec<ConnectedDevice>>,
     pub storage: StorageCollection,
 }
+pub use clock::{ClockCollection, HardwareClock, WindowsServiceState};
 pub use device::{ConnectedDevice, DeviceDriver, DeviceState};

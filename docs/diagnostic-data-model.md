@@ -466,11 +466,10 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 
 ## 今後のカテゴリ設計順序
 
-1. 時計
-2. CPU
-3. BIOS・UEFI
+1. CPU
+2. BIOS・UEFI
 
-GPU、ストレージ、接続デバイス、Windows基本情報は実装済みである。時計情報はWindows基本情報と分離し、システム時刻とハードウェアRTCを混同しない構造で設計する。
+GPU、ストレージ、接続デバイス、Windows基本情報、時計情報は実装済みである。
 
 ## Windows基本情報カテゴリ
 
@@ -503,6 +502,34 @@ Windows実装では、マニフェストの影響を受けず実際のOSバー�
 取得できない値は`null`とし、対応する`/windows/...`のJSON Pointerと理由を`status.json`へ記録する。一部だけ取得できない場合も取得済み情報を保持してコレクターを`partial`とする。
 
 `booted_at`はWindowsのシステム時刻を基準にした算出値であり、ハードウェアRTCが保持する時刻ではない。システム時刻、UTCオフセット、Windows Timeサービス、ハードウェアRTCは、後続の時計情報カテゴリで別に収集する。
+
+## 時計情報カテゴリ
+
+時計情報は`clock`へ保存し、コレクター名は`clock`とする。
+
+```json
+{
+  "clock": {
+    "system_time_utc": "2026-07-17T04:00:00.000Z",
+    "utc_offset_minutes": 540,
+    "windows_time_service": "running",
+    "hardware_clock": null
+  }
+}
+```
+
+- `system_time_utc`: Windowsのシステム時計が報告した時刻をUTCのRFC 3339形式で保存する。
+- `utc_offset_minutes`: 収集時点で有効な、UTCからローカル時刻へのオフセットを分単位で保存する。日本標準時は`540`となる。
+- `windows_time_service`: Windows Timeサービスの現在状態を保存する。
+- `hardware_clock`: Windowsのシステム時計とは独立して取得できたハードウェアRTCの情報を保存する。
+
+`windows_time_service`の値は`stopped`、`start_pending`、`stop_pending`、`running`、`continue_pending`、`pause_pending`、`paused`、`unknown`のいずれかとする。
+
+Windows実装では、システム時刻に`GetSystemTimePreciseAsFileTime`、UTCオフセットに`GetDynamicTimeZoneInformation`、Windows Timeサービスにサービス制御マネージャーの`QueryServiceStatusEx`を使用する。
+
+通常のWindowsユーザーモードAPIでは、Windowsが管理するシステム時計とは独立してハードウェアRTCを直接読み取れない。このため初期実装では`hardware_clock`を`null`とし、`/clock/hardware_clock`へ`unsupported`と`hardware_clock_direct_access_unsupported`を記録する。システム時刻をRTC値として流用しない。
+
+ハードウェアRTC以外の時計情報をすべて取得できた場合も、RTCが未取得であることを隠さず時計コレクターを`partial`とする。将来、安全で再現性のあるRTC取得方式を採用した場合は、`hardware_clock.time_utc`へUTC日時を保存する。
 
 ## GPUカテゴリ
 

@@ -1,5 +1,6 @@
 {
   "windows": {"edition": null, "version": null, "build_number": null, "architecture": null, "booted_at": null, "uptime_ms": null, "boot_mode": null},
+  "clock": {"system_time_utc": null, "utc_offset_minutes": null, "windows_time_service": null, "hardware_clock": null},
   "memory": {
     "physical": {
       "total_bytes": null,

@@ -27,6 +27,13 @@ const WINDOWS_PATHS: [&str; 7] = [
     "/windows/boot_mode",
 ];
 
+const CLOCK_PATHS: [&str; 4] = [
+    "/clock/system_time_utc",
+    "/clock/utc_offset_minutes",
+    "/clock/windows_time_service",
+    "/clock/hardware_clock",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub path: String,
@@ -69,6 +76,36 @@ impl Collection {
             push_error(
                 &mut errors,
                 "/windows/booted_at",
+                "must be a UTC date-time ending in Z",
+            );
+        }
+        if let Some(system_time) = &self.clock.system_time_utc
+            && (!system_time.contains('T') || !system_time.ends_with('Z'))
+        {
+            push_error(
+                &mut errors,
+                "/clock/system_time_utc",
+                "must be a UTC date-time ending in Z",
+            );
+        }
+        if self
+            .clock
+            .utc_offset_minutes
+            .is_some_and(|offset| !(-1_440..=1_440).contains(&offset))
+        {
+            push_error(
+                &mut errors,
+                "/clock/utc_offset_minutes",
+                "must be between -1440 and 1440",
+            );
+        }
+        if let Some(hardware_clock) = &self.clock.hardware_clock
+            && let Some(time) = &hardware_clock.time_utc
+            && (!time.contains('T') || !time.ends_with('Z'))
+        {
+            push_error(
+                &mut errors,
+                "/clock/hardware_clock/time_utc",
                 "must be a UTC date-time ending in Z",
             );
         }
@@ -280,6 +317,20 @@ impl Collection {
         } else if let Some(collector) = windows_collectors.first() {
             validate_windows_status(self, collector, &mut errors);
         }
+        let clock_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Clock)
+            .collect();
+        if clock_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one clock collector result",
+            );
+        } else if let Some(collector) = clock_collectors.first() {
+            validate_clock_status(self, collector, &mut errors);
+        }
         let memory_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -366,6 +417,63 @@ impl Collection {
             &mut errors,
         );
         finish(errors)
+    }
+}
+
+fn validate_clock_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let value = serde_json::to_value(&collection.clock).expect("clock model is serializable");
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            for field in &collector.fields {
+                validate_null_field_result(&value, field, "/clock", errors);
+            }
+            for path in CLOCK_PATHS {
+                let relative = path.strip_prefix("/clock").unwrap_or(path);
+                if value.pointer(relative).is_some_and(Value::is_null)
+                    && !collector.fields.iter().any(|field| field.path == path)
+                {
+                    push_error(
+                        errors,
+                        path,
+                        "null value requires a field collection result",
+                    );
+                }
+            }
+            if collector.status == CollectorStatus::Success
+                && (!collector.fields.is_empty() || !collector.messages.is_empty())
+            {
+                push_error(
+                    errors,
+                    "/collectors/clock/status",
+                    "successful clock collector must not contain failures",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if CLOCK_PATHS.iter().any(|path| {
+                let relative = path.strip_prefix("/clock").unwrap_or(path);
+                value
+                    .pointer(relative)
+                    .is_some_and(|value| !value.is_null())
+            }) {
+                push_error(
+                    errors,
+                    "/clock",
+                    "skipped or failed clock collector requires all values to be null",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/clock/messages",
+                    "skipped or failed clock collector must include a reason",
+                );
+            }
+        }
     }
 }
 
@@ -1097,10 +1205,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        CollectionMessage, CollectorStatus, CommitMemory, Criterion, DiagnosisSummary,
-        EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
-        MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation, RuleEvaluation,
-        RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
+        ClockCollection, CollectionMessage, CollectorStatus, CommitMemory, Criterion,
+        DiagnosisSummary, EvaluationCounts, FieldCollectionResult, FieldCollectionStatus,
+        FindingCounts, MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation,
+        RuleEvaluation, RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
     };
 
     #[test]
@@ -1210,6 +1318,7 @@ mod tests {
     fn complete_collection() -> Collection {
         Collection {
             windows: windows_collection(),
+            clock: clock_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: Some(17_179_869_184),
@@ -1239,6 +1348,7 @@ mod tests {
     fn null_collection() -> Collection {
         Collection {
             windows: windows_collection(),
+            clock: clock_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: None,
@@ -1274,6 +1384,15 @@ mod tests {
             booted_at: Some("2026-07-17T00:00:00.000Z".into()),
             uptime_ms: Some(123_000),
             boot_mode: Some(crate::BootMode::Uefi),
+        }
+    }
+
+    fn clock_collection() -> ClockCollection {
+        ClockCollection {
+            system_time_utc: Some("2026-07-17T00:02:03.000Z".into()),
+            utc_offset_minutes: Some(540),
+            windows_time_service: Some(crate::WindowsServiceState::Running),
+            hardware_clock: None,
         }
     }
 
