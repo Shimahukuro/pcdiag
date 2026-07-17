@@ -701,7 +701,7 @@ WindowsではSetupAPIの全デバイスクラスを列挙し、統一デバイ�
 
 コレクター名は`physical_disks`とする。物理ディスクの列挙に成功して一部の照会だけ失敗した場合は`partial`、列挙を実行できない場合は`failed`とする。
 
-初期実装ではシリアル番号を収集しない。ストレージデバイス記述子にシリアル番号が含まれていても読み取らず、JSONへ保存しない。SMART情報は後続実装の対象とする。
+初期実装ではシリアル番号を収集しない。ストレージデバイス記述子にシリアル番号が含まれていても読み取らず、JSONへ保存しない。
 
 ## パーティションカテゴリ
 
@@ -755,6 +755,39 @@ Windowsが認識しているボリュームは`storage.volumes`へ保存する�
 - ドライブ文字を持たないシステムパーティションや回復パーティションも除外せず、`mount_points`を空配列として保存する。
 
 コレクター名は`volumes`とする。列挙したボリュームの一部でファイルシステム、容量、空き容量、またはディスク範囲を取得できない場合は、取得済み情報を保持したまま`partial`とする。
+
+## SMART・ヘルス情報カテゴリ
+
+ディスクのSMART・ヘルス情報は`storage.smart`へ保存し、`disk_number`で`storage.disks`と関連付ける。コレクター名は`smart`とする。
+
+```json
+{
+  "disk_number": 1,
+  "protocol": "nvme",
+  "predict_failure": null,
+  "critical_warning": 0,
+  "temperature_celsius": 38,
+  "available_spare_percent": 100,
+  "percentage_used": 4,
+  "power_on_hours": 1200,
+  "unsafe_shutdowns": 2,
+  "media_errors": 0
+}
+```
+
+`protocol`の値:
+
+- `nvme`: NVMe SMART / Health Information Logを取得した。
+- `failure_prediction`: Windowsストレージ層の故障予測状態を取得した。
+- `unknown`: どちらの照会方法でも情報を取得できなかった。
+
+NVMeでは`critical_warning`を機器が報告したビットマスクのまま保存する。温度はケルビンから摂氏へ変換し、標準化された予備領域率、使用率、稼働時間、異常終了回数、メディアエラー数を保存する。128ビットのNVMeカウンターがJSONの64ビット整数範囲を超える場合は`null`とし、`invalid_value`を記録する。
+
+Windowsストレージ層の故障予測では`predict_failure`を保存する。NVMe固有項目は`null`とし、`not_applicable`を記録する。ベンダー固有の512バイトは解釈や外部出力をせず、保存しない。
+
+通常権限でも収集可能な情報は取得する。SMART照会が権限不足で拒否された場合は、該当項目を`null`、取得状態を`permission_denied`、理由コードを`smart_permission_denied`として記録し、ほかの収集処理は継続する。管理者権限の有無を事前判定せず、各Windows APIの実際の結果を記録する。
+
+機器またはUSB変換ブリッジがSMART転送に対応していない場合は`unsupported`、権限不足と非対応以外のエラーは`failed`として記録する。
 
 ## 未決定事項
 

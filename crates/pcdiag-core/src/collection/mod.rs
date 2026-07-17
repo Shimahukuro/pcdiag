@@ -6,8 +6,8 @@ mod physical_disk;
 pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
 pub use physical_disk::{
-    DiskBusType, DiskPartition, PartitionStyle, PhysicalDisk, StorageCollection, StorageVolume,
-    VolumeExtent,
+    DiskBusType, DiskPartition, DiskSmart, PartitionStyle, PhysicalDisk, SmartProtocol,
+    StorageCollection, StorageVolume, VolumeExtent,
 };
 
 use serde::{Deserialize, Serialize};

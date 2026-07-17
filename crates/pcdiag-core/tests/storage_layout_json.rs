@@ -106,7 +106,8 @@ fn storage_collection() -> Value {
                 "offset_bytes": 1_048_576,
                 "length_bytes": 99_000_000_000_u64
             }]
-        }]
+        }],
+        "smart": []
     });
     value
 }

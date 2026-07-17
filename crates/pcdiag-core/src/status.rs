@@ -9,6 +9,7 @@ pub enum CollectorName {
     PhysicalDisks,
     Partitions,
     Volumes,
+    Smart,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

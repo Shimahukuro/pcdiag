@@ -43,5 +43,5 @@
     }
   ],
   "devices": [],
-  "storage": {"disks": [], "partitions": [], "volumes": []}
+  "storage": {"disks": [], "partitions": [], "volumes": [], "smart": []}
 }

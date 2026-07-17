@@ -188,6 +188,37 @@ impl Collection {
                 }
             }
         }
+        if let Some(smart_values) = &self.storage.smart {
+            let mut disk_numbers = HashSet::new();
+            for (index, smart) in smart_values.iter().enumerate() {
+                if !disk_numbers.insert(smart.disk_number) {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/smart/{index}/disk_number"),
+                        "must be unique within the SMART collection",
+                    );
+                }
+                if let Some(disks) = &self.storage.disks
+                    && !disks.iter().any(|disk| disk.number == smart.disk_number)
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/smart/{index}/disk_number"),
+                        "must refer to a collected physical disk",
+                    );
+                }
+                if smart
+                    .available_spare_percent
+                    .is_some_and(|value| value > 100)
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/smart/{index}/available_spare_percent"),
+                        "must not be greater than 100",
+                    );
+                }
+            }
+        }
         validate_available_not_greater_than_total(
             &mut errors,
             "/memory/commit",
@@ -276,6 +307,15 @@ impl Collection {
         validate_single_storage_collector(
             self,
             status,
+            CollectorName::Smart,
+            "/storage/smart",
+            self.storage.smart.is_some(),
+            true,
+            &mut errors,
+        );
+        validate_single_storage_collector(
+            self,
+            status,
             CollectorName::Volumes,
             "/storage/volumes",
             self.storage.volumes.is_some(),
@@ -298,6 +338,7 @@ fn validate_single_storage_collector(
     let collector_path = match name {
         CollectorName::Partitions => "/collectors/partitions",
         CollectorName::Volumes => "/collectors/volumes",
+        CollectorName::Smart => "/collectors/smart",
         _ => "/collectors",
     };
     let collectors: Vec<_> = status
@@ -1060,6 +1101,7 @@ mod tests {
                 disks: Some(vec![]),
                 partitions: Some(vec![]),
                 volumes: Some(vec![]),
+                smart: Some(vec![]),
             },
         }
     }
@@ -1087,6 +1129,7 @@ mod tests {
                 disks: Some(vec![]),
                 partitions: Some(vec![]),
                 volumes: Some(vec![]),
+                smart: Some(vec![]),
             },
         }
     }

@@ -7,9 +7,9 @@ pub mod validation;
 
 pub use collection::{
     Collection, CommitMemory, ConnectedDevice, DeviceDriver, DeviceState, DiskBusType,
-    DiskPartition, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers,
-    MemoryCollection, PartitionStyle, PhysicalDisk, PhysicalMemory, StorageCollection,
-    StorageVolume, VirtualMemory, VolumeExtent,
+    DiskPartition, DiskSmart, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory,
+    GpuPciIdentifiers, MemoryCollection, PartitionStyle, PhysicalDisk, PhysicalMemory,
+    SmartProtocol, StorageCollection, StorageVolume, VirtualMemory, VolumeExtent,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
