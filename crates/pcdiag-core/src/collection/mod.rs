@@ -1,10 +1,12 @@
 mod clock;
+mod cpu;
 mod device;
 mod gpu;
 mod memory;
 mod physical_disk;
 mod windows;
 
+pub use cpu::{CpuCollection, CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology};
 pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
 pub use physical_disk::{
@@ -23,6 +25,7 @@ use self::memory::deserialize_required_nullable;
 pub struct Collection {
     pub windows: WindowsCollection,
     pub clock: ClockCollection,
+    pub cpu: CpuCollection,
     pub memory: MemoryCollection,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub gpus: Option<Vec<Gpu>>,

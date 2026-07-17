@@ -531,6 +531,113 @@ Windows実装では、システム時刻に`GetSystemTimePreciseAsFileTime`、UT
 
 ハードウェアRTC以外の時計情報をすべて取得できた場合も、RTCが未取得であることを隠さず時計コレクターを`partial`とする。将来、安全で再現性のあるRTC取得方式を採用した場合は、`hardware_clock.time_utc`へUTC日時を保存する。
 
+## CPUカテゴリ
+
+CPU情報は`cpu`へ保存し、コレクター名は`cpu`とする。複数ソケットを扱えるよう、PC全体のトポロジーと物理CPUパッケージごとの情報を分ける。
+
+```json
+{
+  "cpu": {
+    "architecture": "x86_64",
+    "topology": {
+      "physical_packages": 1,
+      "physical_cores": 14,
+      "logical_processors": 20
+    },
+    "packages": [
+      {
+        "package_index": 0,
+        "manufacturer": "GenuineIntel",
+        "model": "13th Gen Intel(R) Core(TM) i5-13500",
+        "physical_cores": 14,
+        "logical_processors": 20
+      }
+    ],
+    "features": {
+      "available_instruction_sets": [
+        "sse2",
+        "sse3",
+        "ssse3",
+        "sse4_1",
+        "sse4_2",
+        "avx",
+        "avx2",
+        "aes"
+      ],
+      "hardware_virtualization_supported": true,
+      "virtualization_firmware_enabled": true
+    }
+  }
+}
+```
+
+### アーキテクチャ
+
+`architecture`は`x86`、`x86_64`、`arm`、`arm64`、`unknown`のいずれかとし、Windows基本情報と同じ列挙値を使用する。
+
+### トポロジー
+
+- `physical_packages`: Windowsが認識した物理CPUパッケージ数。
+- `physical_cores`: Windowsが認識した物理コア総数。
+- `logical_processors`: Windowsが認識した論理プロセッサー総数。
+
+いずれも取得できた場合は1以上とする。物理コア数は物理CPU数以上、論理プロセッサー数は物理コア数以上でなければならない。
+
+`packages`の各要素:
+
+- `package_index`: 収集結果内で割り当てる0始まりの識別番号。永続的な機器識別子としては使用しない。
+- `manufacturer`: CPUが報告したメーカー識別文字列。
+- `model`: CPUが報告したモデル名またはブランド文字列。
+- `physical_cores`: 対象パッケージに属する物理コア数。
+- `logical_processors`: 対象パッケージに属する論理プロセッサー数。
+
+`packages`が1件以上の場合、`package_index`は重複してはならない。すべてのパッケージでコア数を取得できた場合、その合計は`topology`の対応する総数と一致しなければならない。
+
+`topology`オブジェクトとその3つのキーは省略しない。個別の集計値を取得できない場合は、その値を`null`として理由を記録する。`physical_packages`と`packages`を両方取得できた場合は、物理CPU数と配列件数が一致しなければならない。
+
+`packages`の意味:
+
+- 1件以上: 列挙に成功し、Windowsが認識した物理CPUパッケージを保存した。
+- 空配列: 列挙には成功したが、物理CPUパッケージを検出しなかった。
+- `null`: CPUトポロジーを列挙できなかった、対応していない、または収集を実行しなかった。
+
+### 基本機能
+
+- `available_instruction_sets`: 収集時のWindows環境で利用可能と判定した命令セット名を保存する。配列は重複を許さず、名前は小文字のsnake_caseとする。
+- `hardware_virtualization_supported`: CPUがIntel VMXまたはAMD SVMなどのハードウェア仮想化機能を備えているかを保存する。
+- `virtualization_firmware_enabled`: ハードウェア仮想化機能がBIOS・UEFIで有効とWindowsが報告しているかを保存する。
+
+`features`オブジェクトと3つのキーは省略しない。機能一覧全体または個別の仮想化状態を判定できない場合は、対応する値を`null`として理由を記録する。`available_instruction_sets`が空配列の場合は、判定に成功したが初期実装で定義した命令セットを検出しなかったことを表す。
+
+`available_instruction_sets`はCPUの製品仕様一覧ではなく、収集時のWindows環境で実際に利用可能な基本機能を表す。初期実装で使用できる値は、x86・x64の`sse2`、`sse3`、`ssse3`、`sse4_1`、`sse4_2`、`avx`、`avx2`、`aes`、`sha`と、ARM・ARM64の`neon`、`arm_v8_crypto`とする。
+
+### Windows実装方針
+
+- トポロジーは`GetLogicalProcessorInformationEx`を使用してパッケージ、物理コア、論理プロセッサーを対応付ける。
+- アーキテクチャは`GetNativeSystemInfo`を使用する。
+- x86・x64のメーカー、モデル、命令セット、ハードウェア仮想化対応はCPUIDを使用する。
+- BIOS・UEFIでの仮想化有効状態は`IsProcessorFeaturePresent`を使用する。
+- 複数パッケージでは各パッケージを代表する論理プロセッサー上で識別情報を照会する。確認せずに1つのCPU情報を全パッケージへ複写しない。
+- WMI、PowerShell、外部コマンドは初期実装の必須取得経路にしない。
+
+取得できない値は`null`とし、対応する`/cpu/...`のJSON Pointerと理由を`status.json`へ記録する。一部だけ取得できない場合も、取得済み情報を保持してCPUコレクターを`partial`とする。
+
+### 接続デバイス情報との役割分担
+
+CPUデバイスの開始状態や問題コードは、既存の`devices`コレクターがProcessorクラスを含めて収集している。CPUカテゴリでは同じPnP情報を重複保存せず、診断およびレポート作成時に接続デバイス情報を参照する。
+
+### 初期実装の対象外
+
+- CPU固有ID、Processor ID、シリアル番号
+- 温度、消費電力、電圧、ファン速度
+- 瞬間的なCPU使用率、プロセス別使用率
+- 動作クロック、最大クロック、オーバークロック判定
+- キャッシュ階層の詳細
+- マイクロコードリビジョン
+- ベンダー固有ドライバーまたは管理ツールによる情報
+
+これらは機密情報除外、取得方法の一貫性、初期診断での必要性を考慮し、初期スキーマには含めない。
+
 ## GPUカテゴリ
 
 ### 初期実装の対象

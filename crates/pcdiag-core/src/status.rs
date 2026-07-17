@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum CollectorName {
     Windows,
     Clock,
+    Cpu,
     Memory,
     Gpu,
     Devices,

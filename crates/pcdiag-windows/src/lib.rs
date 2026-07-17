@@ -1,6 +1,7 @@
 //! Windows-specific collectors for pcdiag.
 
 mod clock;
+mod cpu;
 mod devices;
 mod gpu;
 mod memory;
@@ -11,6 +12,7 @@ mod volumes;
 mod windows_info;
 
 pub use clock::{ClockCollectionResult, collect_clock};
+pub use cpu::{CpuCollectionResult, collect_cpu};
 pub use devices::{DeviceCollectionResult, collect_devices};
 pub use gpu::{GpuCollectionResult, collect_gpus};
 pub use memory::{MemoryCollectionResult, collect_memory};

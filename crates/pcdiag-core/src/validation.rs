@@ -34,6 +34,17 @@ const CLOCK_PATHS: [&str; 4] = [
     "/clock/hardware_clock",
 ];
 
+const CPU_FAILURE_PATHS: [&str; 8] = [
+    "/cpu/architecture",
+    "/cpu/topology/physical_packages",
+    "/cpu/topology/physical_cores",
+    "/cpu/topology/logical_processors",
+    "/cpu/packages",
+    "/cpu/features/available_instruction_sets",
+    "/cpu/features/hardware_virtualization_supported",
+    "/cpu/features/virtualization_firmware_enabled",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub path: String,
@@ -108,6 +119,144 @@ impl Collection {
                 "/clock/hardware_clock/time_utc",
                 "must be a UTC date-time ending in Z",
             );
+        }
+        let topology = &self.cpu.topology;
+        for (path, value) in [
+            (
+                "/cpu/topology/physical_packages",
+                topology.physical_packages,
+            ),
+            ("/cpu/topology/physical_cores", topology.physical_cores),
+            (
+                "/cpu/topology/logical_processors",
+                topology.logical_processors,
+            ),
+        ] {
+            if value == Some(0) {
+                push_error(&mut errors, path, "must be greater than zero");
+            }
+        }
+        if let (Some(packages), Some(cores)) = (topology.physical_packages, topology.physical_cores)
+            && cores < packages
+        {
+            push_error(
+                &mut errors,
+                "/cpu/topology/physical_cores",
+                "must not be less than physical_packages",
+            );
+        }
+        if let (Some(cores), Some(logical)) = (topology.physical_cores, topology.logical_processors)
+            && logical < cores
+        {
+            push_error(
+                &mut errors,
+                "/cpu/topology/logical_processors",
+                "must not be less than physical_cores",
+            );
+        }
+        if let Some(packages) = &self.cpu.packages {
+            if let Some(expected) = topology.physical_packages
+                && usize::try_from(expected).ok() != Some(packages.len())
+            {
+                push_error(
+                    &mut errors,
+                    "/cpu/topology/physical_packages",
+                    "must match the number of CPU packages",
+                );
+            }
+            let mut indexes = HashSet::new();
+            for (index, package) in packages.iter().enumerate() {
+                if !indexes.insert(package.package_index) {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/package_index"),
+                        "must be unique within the CPU package collection",
+                    );
+                }
+                if package.manufacturer.as_deref() == Some("") {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/manufacturer"),
+                        "must not be empty",
+                    );
+                }
+                if package.model.as_deref() == Some("") {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/model"),
+                        "must not be empty",
+                    );
+                }
+                if package.physical_cores == Some(0) {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/physical_cores"),
+                        "must be greater than zero",
+                    );
+                }
+                if package.logical_processors == Some(0) {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/logical_processors"),
+                        "must be greater than zero",
+                    );
+                }
+                if let (Some(cores), Some(logical)) =
+                    (package.physical_cores, package.logical_processors)
+                    && logical < cores
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/cpu/packages/{index}/logical_processors"),
+                        "must not be less than physical_cores",
+                    );
+                }
+            }
+            if packages
+                .iter()
+                .all(|package| package.physical_cores.is_some())
+                && let Some(total) = topology.physical_cores
+                && packages
+                    .iter()
+                    .map(|package| u64::from(package.physical_cores.unwrap_or(0)))
+                    .sum::<u64>()
+                    != u64::from(total)
+            {
+                push_error(
+                    &mut errors,
+                    "/cpu/topology/physical_cores",
+                    "must equal the sum of package physical cores",
+                );
+            }
+            if packages
+                .iter()
+                .all(|package| package.logical_processors.is_some())
+                && let Some(total) = topology.logical_processors
+                && packages
+                    .iter()
+                    .map(|package| u64::from(package.logical_processors.unwrap_or(0)))
+                    .sum::<u64>()
+                    != u64::from(total)
+            {
+                push_error(
+                    &mut errors,
+                    "/cpu/topology/logical_processors",
+                    "must equal the sum of package logical processors",
+                );
+            }
+        }
+        if let Some(instruction_sets) = &self.cpu.features.available_instruction_sets {
+            let mut unique = HashSet::new();
+            for instruction_set in instruction_sets {
+                if !unique.insert(instruction_set) {
+                    push_error(
+                        &mut errors,
+                        "/cpu/features/available_instruction_sets",
+                        "must not contain duplicate instruction sets",
+                    );
+                    break;
+                }
+            }
         }
         let physical = &self.memory.physical;
 
@@ -331,6 +480,20 @@ impl Collection {
         } else if let Some(collector) = clock_collectors.first() {
             validate_clock_status(self, collector, &mut errors);
         }
+        let cpu_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Cpu)
+            .collect();
+        if cpu_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one CPU collector result",
+            );
+        } else if let Some(collector) = cpu_collectors.first() {
+            validate_cpu_status(self, collector, &mut errors);
+        }
         let memory_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -471,6 +634,73 @@ fn validate_clock_status(
                     errors,
                     "/collectors/clock/messages",
                     "skipped or failed clock collector must include a reason",
+                );
+            }
+        }
+    }
+}
+
+fn validate_cpu_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collection_value = serde_json::to_value(collection).expect("collection must serialize");
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            for field in &collector.fields {
+                match collection_value.pointer(&field.path) {
+                    Some(Value::Null) => {}
+                    Some(_) => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status must refer to a null value",
+                    ),
+                    None => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status refers to an unknown path",
+                    ),
+                }
+            }
+            let mut null_paths = Vec::new();
+            collect_null_paths(&collection_value["cpu"], "/cpu", &mut null_paths);
+            for path in null_paths {
+                if !collector.fields.iter().any(|field| field.path == path) {
+                    push_error(
+                        errors,
+                        path,
+                        "null CPU value must have a field collection status",
+                    );
+                }
+            }
+            if collector.status == CollectorStatus::Success
+                && (!collector.fields.is_empty() || !collector.messages.is_empty())
+            {
+                push_error(
+                    errors,
+                    "/collectors/cpu/status",
+                    "successful CPU collector must not contain failures",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if CPU_FAILURE_PATHS.iter().any(|path| {
+                collection_value
+                    .pointer(path)
+                    .is_some_and(|value| !value.is_null())
+            }) {
+                push_error(
+                    errors,
+                    "/cpu",
+                    "skipped or failed CPU collector requires all values to be null",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/cpu/messages",
+                    "skipped or failed CPU collector must include a reason",
                 );
             }
         }
@@ -1205,10 +1435,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        ClockCollection, CollectionMessage, CollectorStatus, CommitMemory, Criterion,
-        DiagnosisSummary, EvaluationCounts, FieldCollectionResult, FieldCollectionStatus,
-        FindingCounts, MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation,
-        RuleEvaluation, RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
+        ClockCollection, CollectionMessage, CollectorStatus, CommitMemory, CpuCollection,
+        CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, Criterion, DiagnosisSummary,
+        EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
+        MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation, RuleEvaluation,
+        RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
     };
 
     #[test]
@@ -1319,6 +1550,7 @@ mod tests {
         Collection {
             windows: windows_collection(),
             clock: clock_collection(),
+            cpu: cpu_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: Some(17_179_869_184),
@@ -1349,6 +1581,7 @@ mod tests {
         Collection {
             windows: windows_collection(),
             clock: clock_collection(),
+            cpu: cpu_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: None,
@@ -1393,6 +1626,33 @@ mod tests {
             utc_offset_minutes: Some(540),
             windows_time_service: Some(crate::WindowsServiceState::Running),
             hardware_clock: None,
+        }
+    }
+
+    fn cpu_collection() -> CpuCollection {
+        CpuCollection {
+            architecture: Some(crate::SystemArchitecture::X86_64),
+            topology: CpuTopology {
+                physical_packages: Some(1),
+                physical_cores: Some(14),
+                logical_processors: Some(20),
+            },
+            packages: Some(vec![CpuPackage {
+                package_index: 0,
+                manufacturer: Some("GenuineIntel".into()),
+                model: Some("Example CPU".into()),
+                physical_cores: Some(14),
+                logical_processors: Some(20),
+            }]),
+            features: CpuFeatures {
+                available_instruction_sets: Some(vec![
+                    CpuInstructionSet::Sse2,
+                    CpuInstructionSet::Avx,
+                    CpuInstructionSet::Avx2,
+                ]),
+                hardware_virtualization_supported: Some(true),
+                virtualization_firmware_enabled: Some(true),
+            },
         }
     }
 

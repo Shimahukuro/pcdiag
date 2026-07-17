@@ -53,12 +53,12 @@ Issue #2「CLI基本仕様」に記載された要求が、データモデル、
 |---|---|---|---|---|
 | メーカー | `/cpu/packages/*/manufacturer` | `cpu` | 表示のみ | CPU |
 | モデル名 | `/cpu/packages/*/model` | `cpu` | 表示・診断根拠 | CPU |
-| 物理CPU数 | `/cpu/packages`の件数 | `cpu` | 表示のみ | CPU |
-| 物理コア数 | `/cpu/packages/*/physical_cores` | `cpu` | 診断根拠候補 | CPU |
-| 論理プロセッサー数 | `/cpu/packages/*/logical_processors` | `cpu` | 診断根拠候補 | CPU |
-| アーキテクチャ | `/cpu/packages/*/architecture` | `cpu` | 診断根拠候補 | CPU |
-| Windows上の状態 | `/cpu/packages/*/status` | `cpu` | 診断対象候補 | CPU |
-| 基本機能 | `/cpu/packages/*/features` | `cpu` | 診断根拠候補 | CPU |
+| 物理CPU数 | `/cpu/topology/physical_packages`および`/cpu/packages`の件数 | `cpu` | 表示のみ | CPU |
+| 物理コア数 | `/cpu/topology/physical_cores`、`/cpu/packages/*/physical_cores` | `cpu` | 診断根拠候補 | CPU |
+| 論理プロセッサー数 | `/cpu/topology/logical_processors`、`/cpu/packages/*/logical_processors` | `cpu` | 診断根拠候補 | CPU |
+| アーキテクチャ | `/cpu/architecture` | `cpu` | 診断根拠候補 | CPU |
+| Windows上の状態 | `/devices/*`のProcessorクラス | `devices` | 診断対象候補 | CPU・デバイス |
+| 基本機能 | `/cpu/features` | `cpu` | 診断根拠候補 | CPU |
 
 ## メモリ
 
@@ -180,4 +180,3 @@ Issue #2「CLI基本仕様」に記載された要求が、データモデル、
 - 表示専用情報として分類されている。
 - 初期対象外として理由が記録されている。
 - 機密情報としてスキーマから禁止されている。
-
