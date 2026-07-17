@@ -171,10 +171,12 @@ mod platform {
     use std::{ffi::c_void, mem::size_of, ptr::read_unaligned};
 
     use windows::Win32::Foundation::{
-        CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND, HANDLE,
+        CloseHandle, ERROR_FILE_NOT_FOUND, ERROR_INSUFFICIENT_BUFFER, ERROR_PATH_NOT_FOUND,
+        GetLastError, HANDLE,
     };
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        QueryDosDeviceW,
     };
     use windows::Win32::System::IO::DeviceIoControl;
     use windows::Win32::System::Ioctl::{
@@ -189,7 +191,6 @@ mod platform {
         PropertyFailure,
     };
 
-    const MAX_PHYSICAL_DISKS: u32 = 64;
     const IOCTL_BUFFER_SIZE: usize = 4096;
 
     struct OwnedHandle(HANDLE);
@@ -205,7 +206,10 @@ mod platform {
         let mut disks = Vec::new();
         let mut messages = Vec::new();
 
-        for number in 0..MAX_PHYSICAL_DISKS {
+        let numbers = enumerate_disk_numbers().map_err(|error| EnumerationFailure {
+            native_code: Some(i64::from(error.code().0)),
+        })?;
+        for number in numbers {
             match open_disk(number) {
                 Ok(handle) => disks.push(query_disk(handle.0, number)),
                 Err(error)
@@ -220,6 +224,33 @@ mod platform {
         }
 
         Ok(EnumerationResult { disks, messages })
+    }
+
+    fn enumerate_disk_numbers() -> windows::core::Result<Vec<u32>> {
+        let mut capacity = 4096;
+        loop {
+            let mut buffer = vec![0_u16; capacity];
+            // SAFETY: A null device name requests the complete DOS device name list and the
+            // supplied UTF-16 buffer is writable for its full length.
+            let length = unsafe { QueryDosDeviceW(PCWSTR::null(), Some(&mut buffer)) };
+            if length != 0 {
+                let mut numbers: Vec<_> = buffer[..length as usize]
+                    .split(|value| *value == 0)
+                    .filter_map(|name| String::from_utf16(name).ok())
+                    .filter_map(|name| name.strip_prefix("PhysicalDrive")?.parse().ok())
+                    .collect();
+                numbers.sort_unstable();
+                numbers.dedup();
+                return Ok(numbers);
+            }
+
+            // SAFETY: QueryDosDeviceW failed immediately before this call.
+            let error = windows::core::Error::from_hresult(unsafe { GetLastError() }.to_hresult());
+            if error.code() != ERROR_INSUFFICIENT_BUFFER.to_hresult() {
+                return Err(error);
+            }
+            capacity = capacity.checked_mul(2).ok_or(error)?;
+        }
     }
 
     fn open_disk(number: u32) -> windows::core::Result<OwnedHandle> {
