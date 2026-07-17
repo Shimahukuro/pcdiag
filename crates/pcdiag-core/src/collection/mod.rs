@@ -1,3 +1,4 @@
+mod device;
 mod gpu;
 mod memory;
 
@@ -15,4 +16,7 @@ pub struct Collection {
     pub memory: MemoryCollection,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub gpus: Option<Vec<Gpu>>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub devices: Option<Vec<ConnectedDevice>>,
 }
+pub use device::{ConnectedDevice, DeviceDriver, DeviceState};

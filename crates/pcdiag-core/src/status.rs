@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum CollectorName {
     Memory,
     Gpu,
+    Devices,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

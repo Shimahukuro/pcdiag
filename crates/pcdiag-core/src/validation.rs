@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{collections::HashSet, fmt};
 
 use serde_json::Value;
 
@@ -61,6 +61,21 @@ impl Collection {
             physical.available_bytes,
             physical.total_bytes,
         );
+
+        if let Some(gpus) = &self.gpus {
+            let mut instance_ids = HashSet::new();
+            for (index, gpu) in gpus.iter().enumerate() {
+                if let Some(instance_id) = &gpu.device_instance_id
+                    && !instance_ids.insert(instance_id)
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/gpus/{index}/device_instance_id"),
+                        "must be unique within the GPU collection",
+                    );
+                }
+            }
+        }
         validate_available_not_greater_than_total(
             &mut errors,
             "/memory/commit",
@@ -95,7 +110,124 @@ impl Collection {
         }
 
         validate_memory_status(self, memory_collectors[0], &mut errors);
+        let gpu_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Gpu)
+            .collect();
+        if gpu_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one GPU collector result",
+            );
+        } else if let Some(collector) = gpu_collectors.first() {
+            validate_gpu_status(self, collector, &mut errors);
+        }
         finish(errors)
+    }
+}
+
+fn validate_gpu_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collection_value = serde_json::to_value(collection).expect("collection must serialize");
+
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            if collection.gpus.is_none() {
+                push_error(
+                    errors,
+                    "/gpus",
+                    "successful or partial GPU collectors require a GPU array",
+                );
+                return;
+            }
+
+            for field in &collector.fields {
+                match collection_value.pointer(&field.path) {
+                    Some(Value::Null) => {}
+                    Some(_) => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status must refer to a null value",
+                    ),
+                    None => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status refers to an unknown path",
+                    ),
+                }
+            }
+
+            for path in gpu_null_paths(collection) {
+                if !collector.fields.iter().any(|field| field.path == path) {
+                    push_error(
+                        errors,
+                        path,
+                        "null GPU value must have a field collection status",
+                    );
+                }
+            }
+
+            if collector.status == CollectorStatus::Success
+                && collector
+                    .fields
+                    .iter()
+                    .any(|field| field.status != crate::FieldCollectionStatus::NotApplicable)
+            {
+                push_error(
+                    errors,
+                    "/collectors/gpu/status",
+                    "success may only contain not_applicable field statuses",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if collection.gpus.is_some() {
+                push_error(
+                    errors,
+                    "/gpus",
+                    "skipped or failed GPU collectors require a null GPU collection",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/gpu/messages",
+                    "skipped or failed GPU collectors must include a reason",
+                );
+            }
+        }
+    }
+}
+
+fn gpu_null_paths(collection: &Collection) -> Vec<String> {
+    let Some(gpus) = &collection.gpus else {
+        return vec![];
+    };
+    let value = serde_json::to_value(gpus).expect("GPU collection must serialize");
+    let mut paths = Vec::new();
+    collect_null_paths(&value, "/gpus", &mut paths);
+    paths
+}
+
+fn collect_null_paths(value: &Value, path: &str, paths: &mut Vec<String>) {
+    match value {
+        Value::Null => paths.push(path.into()),
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                collect_null_paths(value, &format!("{path}/{index}"), paths);
+            }
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                collect_null_paths(value, &format!("{path}/{key}"), paths);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -448,6 +580,7 @@ mod tests {
                 },
             },
             gpus: Some(vec![]),
+            devices: Some(vec![]),
         }
     }
 
@@ -469,6 +602,7 @@ mod tests {
                 },
             },
             gpus: Some(vec![]),
+            devices: Some(vec![]),
         }
     }
 
