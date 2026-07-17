@@ -663,6 +663,46 @@ GPUの列挙に成功し、一部フィールドだけ取得できなかった�
 
 WindowsではSetupAPIの全デバイスクラスを列挙し、統一デバイスプロパティから名称、メーカー、クラス、存在状態、問題コード、ドライバー情報を取得する。現在存在しないデバイスも対象とするため、列挙時に`DIGCF_PRESENT`だけへ限定しない。
 
+## 物理ディスクカテゴリ
+
+物理ディスクの基本情報は`storage.disks`へ保存する。初期実装ではWindowsの`PhysicalDrive`を照会し、次の項目を収集する。
+
+- `number`: Windowsが割り当てた物理ディスク番号
+- `model`: 製品名またはモデル名
+- `manufacturer`: メーカー名
+- `firmware_revision`: ファームウェアリビジョン
+- `bus_type`: Windowsが報告する接続方式
+- `capacity_bytes`: ディスク全体の容量（バイト）
+- `logical_sector_size_bytes`: 論理セクターサイズ（バイト）
+- `removable`: リムーバブルメディアとして報告されているか
+
+```json
+{
+  "storage": {
+    "disks": [
+      {
+        "number": 2,
+        "model": "Example USB Disk",
+        "manufacturer": "Example Vendor",
+        "firmware_revision": "1.0",
+        "bus_type": "usb",
+        "capacity_bytes": 32000000000,
+        "logical_sector_size_bytes": 512,
+        "removable": true
+      }
+    ]
+  }
+}
+```
+
+`bus_type`は、`scsi`、`atapi`、`ata`、`ieee1394`、`ssa`、`fibre`、`usb`、`raid`、`iscsi`、`sas`、`sata`、`sd`、`mmc`、`virtual`、`file_backed_virtual`、`storage_spaces`、`nvme`、`storage_class_memory`、`ufs`、`unknown`のいずれかとする。
+
+ディスク番号は同一の収集結果内で重複してはならない。容量と論理セクターサイズは、取得できた場合は0より大きい値とする。取得できない項目は`null`とし、`/storage/disks/0/...`形式のJSON Pointerと理由を`status.json`へ記録する。
+
+コレクター名は`physical_disks`とする。物理ディスクの列挙に成功して一部の照会だけ失敗した場合は`partial`、列挙を実行できない場合は`failed`とする。
+
+初期実装ではシリアル番号を収集しない。ストレージデバイス記述子にシリアル番号が含まれていても読み取らず、JSONへ保存しない。パーティション、ボリューム、ドライブ文字、ファイルシステム、空き容量、SMART情報は後続実装の対象とする。
+
 ## 未決定事項
 
 - 診断結果の正式な重大度体系

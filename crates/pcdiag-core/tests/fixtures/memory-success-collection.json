@@ -15,5 +15,6 @@
     }
   },
   "gpus": [],
-  "devices": []
+  "devices": [],
+  "storage": {"disks": []}
 }

@@ -1,4 +1,4 @@
-//! Shared data contracts for pcdiag artifacts.
+//! Shared data specifications for pcdiag artifacts.
 
 pub mod collection;
 pub mod diagnosis;
@@ -6,9 +6,9 @@ pub mod status;
 pub mod validation;
 
 pub use collection::{
-    Collection, CommitMemory, ConnectedDevice, DeviceDriver, DeviceState, Gpu, GpuAdapterType,
-    GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers, MemoryCollection, PhysicalMemory,
-    VirtualMemory,
+    Collection, CommitMemory, ConnectedDevice, DeviceDriver, DeviceState, DiskBusType, Gpu,
+    GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers, MemoryCollection,
+    PhysicalDisk, PhysicalMemory, StorageCollection, VirtualMemory,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,

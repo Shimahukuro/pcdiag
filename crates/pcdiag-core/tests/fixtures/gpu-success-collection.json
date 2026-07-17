@@ -42,5 +42,6 @@
       }
     }
   ],
-  "devices": []
+  "devices": [],
+  "storage": {"disks": []}
 }

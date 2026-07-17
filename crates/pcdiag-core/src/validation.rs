@@ -90,6 +90,32 @@ impl Collection {
                 }
             }
         }
+        if let Some(disks) = &self.storage.disks {
+            let mut numbers = HashSet::new();
+            for (index, disk) in disks.iter().enumerate() {
+                if !numbers.insert(disk.number) {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/disks/{index}/number"),
+                        "must be unique within the physical disk collection",
+                    );
+                }
+                if disk.capacity_bytes == Some(0) {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/disks/{index}/capacity_bytes"),
+                        "must be greater than zero",
+                    );
+                }
+                if disk.logical_sector_size_bytes == Some(0) {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/disks/{index}/logical_sector_size_bytes"),
+                        "must be greater than zero",
+                    );
+                }
+            }
+        }
         validate_available_not_greater_than_total(
             &mut errors,
             "/memory/commit",
@@ -152,7 +178,92 @@ impl Collection {
         } else if let Some(collector) = device_collectors.first() {
             validate_device_status(self, collector, &mut errors);
         }
+        let disk_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::PhysicalDisks)
+            .collect();
+        if disk_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one physical disk collector result",
+            );
+        } else if let Some(collector) = disk_collectors.first() {
+            validate_physical_disk_status(self, collector, &mut errors);
+        }
         finish(errors)
+    }
+}
+
+fn validate_physical_disk_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collection_value = serde_json::to_value(collection).expect("collection must serialize");
+
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            let Some(disks) = &collection.storage.disks else {
+                push_error(
+                    errors,
+                    "/storage/disks",
+                    "successful or partial physical disk collectors require a disk array",
+                );
+                return;
+            };
+
+            for field in &collector.fields {
+                match collection_value.pointer(&field.path) {
+                    Some(Value::Null) => {}
+                    Some(_) => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status must refer to a null value",
+                    ),
+                    None => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status refers to an unknown path",
+                    ),
+                }
+            }
+            for path in physical_disk_null_paths(disks) {
+                if !collector.fields.iter().any(|field| field.path == path) {
+                    push_error(
+                        errors,
+                        path,
+                        "null physical disk value must have a field collection status",
+                    );
+                }
+            }
+            if collector.status == CollectorStatus::Success
+                && (!collector.fields.is_empty() || !collector.messages.is_empty())
+            {
+                push_error(
+                    errors,
+                    "/collectors/physical_disks/status",
+                    "success cannot contain physical disk collection failures",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if collection.storage.disks.is_some() {
+                push_error(
+                    errors,
+                    "/storage/disks",
+                    "skipped or failed physical disk collectors require a null collection",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/physical_disks/messages",
+                    "skipped or failed physical disk collectors must include a reason",
+                );
+            }
+        }
     }
 }
 
@@ -341,6 +452,13 @@ fn device_null_paths(devices: &[crate::ConnectedDevice]) -> Vec<String> {
     let value = serde_json::to_value(devices).expect("device collection must serialize");
     let mut paths = Vec::new();
     collect_null_paths(&value, "/devices", &mut paths);
+    paths
+}
+
+fn physical_disk_null_paths(disks: &[crate::PhysicalDisk]) -> Vec<String> {
+    let value = serde_json::to_value(disks).expect("physical disk collection must serialize");
+    let mut paths = Vec::new();
+    collect_null_paths(&value, "/storage/disks", &mut paths);
     paths
 }
 
@@ -585,7 +703,7 @@ mod tests {
         CollectionMessage, CollectorStatus, CommitMemory, Criterion, DiagnosisSummary,
         EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
         MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation, RuleEvaluation,
-        RuleSetInfo, Severity, VirtualMemory,
+        RuleSetInfo, Severity, StorageCollection, VirtualMemory,
     };
 
     #[test]
@@ -711,6 +829,9 @@ mod tests {
             },
             gpus: Some(vec![]),
             devices: Some(vec![]),
+            storage: StorageCollection {
+                disks: Some(vec![]),
+            },
         }
     }
 
@@ -733,6 +854,9 @@ mod tests {
             },
             gpus: Some(vec![]),
             devices: Some(vec![]),
+            storage: StorageCollection {
+                disks: Some(vec![]),
+            },
         }
     }
 

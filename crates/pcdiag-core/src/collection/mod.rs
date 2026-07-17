@@ -1,9 +1,11 @@
 mod device;
 mod gpu;
 mod memory;
+mod physical_disk;
 
 pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
+pub use physical_disk::{DiskBusType, PhysicalDisk, StorageCollection};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,5 +20,6 @@ pub struct Collection {
     pub gpus: Option<Vec<Gpu>>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub devices: Option<Vec<ConnectedDevice>>,
+    pub storage: StorageCollection,
 }
 pub use device::{ConnectedDevice, DeviceDriver, DeviceState};
