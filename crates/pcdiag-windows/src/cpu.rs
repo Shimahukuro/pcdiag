@@ -485,8 +485,11 @@ mod platform {
     }
 
     #[cfg(target_arch = "x86")]
+    #[allow(unused_unsafe)]
     fn cpuid(leaf: u32) -> CpuidValues {
-        let value = std::arch::x86::__cpuid(leaf);
+        // SAFETY: CPUID is available on Windows-supported x86 processors. Some
+        // Rust versions expose this intrinsic as safe, others as unsafe.
+        let value = unsafe { std::arch::x86::__cpuid(leaf) };
         CpuidValues {
             eax: value.eax,
             ebx: value.ebx,
@@ -496,8 +499,11 @@ mod platform {
     }
 
     #[cfg(target_arch = "x86_64")]
+    #[allow(unused_unsafe)]
     fn cpuid(leaf: u32) -> CpuidValues {
-        let value = std::arch::x86_64::__cpuid(leaf);
+        // SAFETY: CPUID is always available on x86_64. The allow keeps this
+        // source compatible with Rust versions where the intrinsic is safe.
+        let value = unsafe { std::arch::x86_64::__cpuid(leaf) };
         CpuidValues {
             eax: value.eax,
             ebx: value.ebx,
@@ -507,8 +513,10 @@ mod platform {
     }
 
     #[cfg(target_arch = "x86")]
+    #[allow(unused_unsafe)]
     fn cpuid_count(leaf: u32, subleaf: u32) -> CpuidValues {
-        let value = std::arch::x86::__cpuid_count(leaf, subleaf);
+        // SAFETY: callers check the maximum supported leaf before this call.
+        let value = unsafe { std::arch::x86::__cpuid_count(leaf, subleaf) };
         CpuidValues {
             eax: value.eax,
             ebx: value.ebx,
@@ -518,8 +526,10 @@ mod platform {
     }
 
     #[cfg(target_arch = "x86_64")]
+    #[allow(unused_unsafe)]
     fn cpuid_count(leaf: u32, subleaf: u32) -> CpuidValues {
-        let value = std::arch::x86_64::__cpuid_count(leaf, subleaf);
+        // SAFETY: callers check the maximum supported leaf before this call.
+        let value = unsafe { std::arch::x86_64::__cpuid_count(leaf, subleaf) };
         CpuidValues {
             eax: value.eax,
             ebx: value.ebx,
