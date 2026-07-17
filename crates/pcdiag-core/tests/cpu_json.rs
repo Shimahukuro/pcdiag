@@ -20,11 +20,22 @@ fn missing_cpu_field_is_rejected_but_null_is_allowed() {
     value["cpu"]["features"]
         .as_object_mut()
         .unwrap()
-        .remove("hardware_virtualization_supported");
+        .remove("hardware_virtualization_extensions_available");
     assert!(serde_json::from_value::<Collection>(value).is_err());
 
     let mut value: Value = serde_json::from_str(COLLECTION).unwrap();
-    value["cpu"]["features"]["hardware_virtualization_supported"] = Value::Null;
+    value["cpu"]["features"]["hardware_virtualization_extensions_available"] = Value::Null;
+    assert!(serde_json::from_value::<Collection>(value).is_ok());
+
+    let mut value: Value = serde_json::from_str(COLLECTION).unwrap();
+    value["cpu"]["features"]
+        .as_object_mut()
+        .unwrap()
+        .remove("hypervisor_present");
+    assert!(serde_json::from_value::<Collection>(value).is_err());
+
+    let mut value: Value = serde_json::from_str(COLLECTION).unwrap();
+    value["cpu"]["features"]["hypervisor_present"] = Value::Null;
     assert!(serde_json::from_value::<Collection>(value).is_ok());
 }
 

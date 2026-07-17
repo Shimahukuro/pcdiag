@@ -34,15 +34,16 @@ const CLOCK_PATHS: [&str; 4] = [
     "/clock/hardware_clock",
 ];
 
-const CPU_FAILURE_PATHS: [&str; 8] = [
+const CPU_FAILURE_PATHS: [&str; 9] = [
     "/cpu/architecture",
     "/cpu/topology/physical_packages",
     "/cpu/topology/physical_cores",
     "/cpu/topology/logical_processors",
     "/cpu/packages",
     "/cpu/features/available_instruction_sets",
-    "/cpu/features/hardware_virtualization_supported",
+    "/cpu/features/hardware_virtualization_extensions_available",
     "/cpu/features/virtualization_firmware_enabled",
+    "/cpu/features/hypervisor_present",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1650,8 +1651,9 @@ mod tests {
                     CpuInstructionSet::Avx,
                     CpuInstructionSet::Avx2,
                 ]),
-                hardware_virtualization_supported: Some(true),
+                hardware_virtualization_extensions_available: Some(true),
                 virtualization_firmware_enabled: Some(true),
+                hypervisor_present: Some(false),
             },
         }
     }

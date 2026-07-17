@@ -1,7 +1,7 @@
 {
   "windows": {"edition": "Professional", "version": "10.0.26100", "build_number": 26100, "architecture": "x86_64", "booted_at": "2026-07-17T00:00:00.000Z", "uptime_ms": 123000, "boot_mode": "uefi"},
   "clock": {"system_time_utc": "2026-07-17T00:02:03.000Z", "utc_offset_minutes": 540, "windows_time_service": "running", "hardware_clock": null},
-  "cpu": {"architecture": "x86_64", "topology": {"physical_packages": 1, "physical_cores": 14, "logical_processors": 20}, "packages": [{"package_index": 0, "manufacturer": "GenuineIntel", "model": "Example CPU", "physical_cores": 14, "logical_processors": 20}], "features": {"available_instruction_sets": ["sse2", "avx", "avx2"], "hardware_virtualization_supported": true, "virtualization_firmware_enabled": true}},
+  "cpu": {"architecture": "x86_64", "topology": {"physical_packages": 1, "physical_cores": 14, "logical_processors": 20}, "packages": [{"package_index": 0, "manufacturer": "GenuineIntel", "model": "Example CPU", "physical_cores": 14, "logical_processors": 20}], "features": {"available_instruction_sets": ["sse2", "avx", "avx2"], "hardware_virtualization_extensions_available": true, "virtualization_firmware_enabled": true, "hypervisor_present": false}},
   "memory": {
     "physical": {
       "total_bytes": 17179869184,

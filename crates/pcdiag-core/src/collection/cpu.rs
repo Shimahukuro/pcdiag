@@ -40,9 +40,11 @@ pub struct CpuFeatures {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub available_instruction_sets: Option<Vec<CpuInstructionSet>>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub hardware_virtualization_supported: Option<bool>,
+    pub hardware_virtualization_extensions_available: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub virtualization_firmware_enabled: Option<bool>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub hypervisor_present: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

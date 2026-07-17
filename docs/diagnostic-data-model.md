@@ -564,8 +564,9 @@ CPU情報は`cpu`へ保存し、コレクター名は`cpu`とする。複数ソ�
         "avx2",
         "aes"
       ],
-      "hardware_virtualization_supported": true,
-      "virtualization_firmware_enabled": true
+      "hardware_virtualization_extensions_available": true,
+      "virtualization_firmware_enabled": true,
+      "hypervisor_present": false
     }
   }
 }
@@ -604,10 +605,11 @@ CPU情報は`cpu`へ保存し、コレクター名は`cpu`とする。複数ソ�
 ### 基本機能
 
 - `available_instruction_sets`: 収集時のWindows環境で利用可能と判定した命令セット名を保存する。配列は重複を許さず、名前は小文字のsnake_caseとする。
-- `hardware_virtualization_supported`: CPUがIntel VMXまたはAMD SVMなどのハードウェア仮想化機能を備えているかを保存する。
+- `hardware_virtualization_extensions_available`: 現在の実行環境からIntel VMXまたはAMD SVMなどのハードウェア仮想化拡張が利用可能とCPUIDが報告しているかを保存する。CPU製品自体の対応可否を表す値ではない。
 - `virtualization_firmware_enabled`: ハードウェア仮想化機能がBIOS・UEFIで有効とWindowsが報告しているかを保存する。
+- `hypervisor_present`: 現在の実行環境でハイパーバイザーの存在をCPUIDが報告しているかを保存する。
 
-`features`オブジェクトと3つのキーは省略しない。機能一覧全体または個別の仮想化状態を判定できない場合は、対応する値を`null`として理由を記録する。`available_instruction_sets`が空配列の場合は、判定に成功したが初期実装で定義した命令セットを検出しなかったことを表す。
+`features`オブジェクトと4つのキーは省略しない。機能一覧全体または個別の仮想化状態を判定できない場合は、対応する値を`null`として理由を記録する。`available_instruction_sets`が空配列の場合は、判定に成功したが初期実装で定義した命令セットを検出しなかったことを表す。
 
 `available_instruction_sets`はCPUの製品仕様一覧ではなく、収集時のWindows環境で実際に利用可能な基本機能を表す。初期実装で使用できる値は、x86・x64の`sse2`、`sse3`、`ssse3`、`sse4_1`、`sse4_2`、`avx`、`avx2`、`aes`、`sha`と、ARM・ARM64の`neon`、`arm_v8_crypto`とする。
 
@@ -615,7 +617,7 @@ CPU情報は`cpu`へ保存し、コレクター名は`cpu`とする。複数ソ�
 
 - トポロジーは`GetLogicalProcessorInformationEx`を使用してパッケージ、物理コア、論理プロセッサーを対応付ける。
 - アーキテクチャは`GetNativeSystemInfo`を使用する。
-- x86・x64のメーカー、モデル、命令セット、ハードウェア仮想化対応はCPUIDを使用する。
+- x86・x64のメーカー、モデル、命令セット、ハードウェア仮想化拡張の公開状態、ハイパーバイザーの存在はCPUIDを使用する。
 - BIOS・UEFIでの仮想化有効状態は`IsProcessorFeaturePresent`を使用する。
 - 複数パッケージでは各パッケージを代表する論理プロセッサー上で識別情報を照会する。確認せずに1つのCPU情報を全パッケージへ複写しない。
 - WMI、PowerShell、外部コマンドは初期実装の必須取得経路にしない。

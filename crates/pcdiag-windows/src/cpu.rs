@@ -105,8 +105,9 @@ fn null_collection() -> CpuCollection {
         packages: None,
         features: CpuFeatures {
             available_instruction_sets: None,
-            hardware_virtualization_supported: None,
+            hardware_virtualization_extensions_available: None,
             virtualization_firmware_enabled: None,
+            hypervisor_present: None,
         },
     }
 }
@@ -162,7 +163,8 @@ mod platform {
         manufacturer: String,
         model: String,
         instruction_sets: Vec<CpuInstructionSet>,
-        hardware_virtualization_supported: bool,
+        hardware_virtualization_extensions_available: bool,
+        hypervisor_present: bool,
     }
 
     pub(super) fn collect() -> Result<CpuSnapshot, CollectionFailure> {
@@ -252,7 +254,7 @@ mod platform {
             }
         }
 
-        let (instruction_sets, hardware_virtualization_supported) =
+        let (instruction_sets, hardware_virtualization_extensions_available, hypervisor_present) =
             aggregate_features(&identities, topologies.len(), architecture, &mut missing);
         let physical_packages = u32::try_from(topologies.len()).map_err(|_| CollectionFailure {
             code: "cpu_topology_value_overflow",
@@ -278,8 +280,9 @@ mod platform {
             packages: Some(packages),
             features: CpuFeatures {
                 available_instruction_sets: instruction_sets,
-                hardware_virtualization_supported,
+                hardware_virtualization_extensions_available,
                 virtualization_firmware_enabled: Some(firmware_virtualization),
+                hypervisor_present,
             },
             messages,
             missing,
@@ -606,7 +609,7 @@ mod platform {
                 instruction_sets.push(CpuInstructionSet::Sha);
             }
         }
-        let hardware_virtualization_supported = if manufacturer == "GenuineIntel" {
+        let hardware_virtualization_extensions_available = if manufacturer == "GenuineIntel" {
             leaf1.ecx & (1 << 5) != 0
         } else if manufacturer == "AuthenticAMD" && extended.eax >= 0x8000_0001 {
             cpuid(0x8000_0001).ecx & (1 << 2) != 0
@@ -617,7 +620,8 @@ mod platform {
             manufacturer,
             model,
             instruction_sets,
-            hardware_virtualization_supported,
+            hardware_virtualization_extensions_available,
+            hypervisor_present: leaf1.ecx & (1 << 31) != 0,
         })
     }
 
@@ -626,7 +630,7 @@ mod platform {
         package_count: usize,
         architecture: SystemArchitecture,
         missing: &mut Vec<MissingField>,
-    ) -> (Option<Vec<CpuInstructionSet>>, Option<bool>) {
+    ) -> (Option<Vec<CpuInstructionSet>>, Option<bool>, Option<bool>) {
         if identities.len() == package_count {
             let mut available: HashSet<_> =
                 identities[0].instruction_sets.iter().copied().collect();
@@ -657,7 +661,12 @@ mod platform {
                 Some(
                     identities
                         .iter()
-                        .all(|identity| identity.hardware_virtualization_supported),
+                        .all(|identity| identity.hardware_virtualization_extensions_available),
+                ),
+                Some(
+                    identities
+                        .iter()
+                        .any(|identity| identity.hypervisor_present),
                 ),
             );
         }
@@ -676,17 +685,24 @@ mod platform {
                 instruction_sets.push(CpuInstructionSet::ArmV8Crypto);
             }
             missing.push(MissingField {
-                path: "/cpu/features/hardware_virtualization_supported".into(),
+                path: "/cpu/features/hardware_virtualization_extensions_available".into(),
                 status: FieldCollectionStatus::Unsupported,
                 code: "cpu_virtualization_support_unsupported",
                 native_code: None,
             });
-            return (Some(instruction_sets), None);
+            missing.push(MissingField {
+                path: "/cpu/features/hypervisor_present".into(),
+                status: FieldCollectionStatus::Unsupported,
+                code: "cpu_hypervisor_detection_unsupported",
+                native_code: None,
+            });
+            return (Some(instruction_sets), None, None);
         }
 
         for path in [
             "/cpu/features/available_instruction_sets",
-            "/cpu/features/hardware_virtualization_supported",
+            "/cpu/features/hardware_virtualization_extensions_available",
+            "/cpu/features/hypervisor_present",
         ] {
             missing.push(MissingField {
                 path: path.into(),
@@ -695,7 +711,7 @@ mod platform {
                 native_code: None,
             });
         }
-        (None, None)
+        (None, None, None)
     }
 
     fn failure_status(failure: &CollectionFailure) -> FieldCollectionStatus {
@@ -767,8 +783,9 @@ mod tests {
             }]),
             features: CpuFeatures {
                 available_instruction_sets: Some(vec![CpuInstructionSet::Sse2]),
-                hardware_virtualization_supported: Some(true),
+                hardware_virtualization_extensions_available: Some(true),
                 virtualization_firmware_enabled: Some(true),
+                hypervisor_present: Some(false),
             },
             messages: vec![],
             missing: vec![],
@@ -798,8 +815,9 @@ mod tests {
             }]),
             features: CpuFeatures {
                 available_instruction_sets: Some(vec![CpuInstructionSet::Neon]),
-                hardware_virtualization_supported: None,
+                hardware_virtualization_extensions_available: None,
                 virtualization_firmware_enabled: Some(true),
+                hypervisor_present: None,
             },
             messages: vec![],
             missing: vec![MissingField {
