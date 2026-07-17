@@ -110,7 +110,11 @@ fn build_result(
                 collection: Some(collection),
                 status: CollectorResult {
                     name: CollectorName::Gpu,
-                    status: if fields.is_empty() && enumeration.messages.is_empty() {
+                    status: if enumeration.messages.is_empty()
+                        && fields
+                            .iter()
+                            .all(|field| field.status == FieldCollectionStatus::NotApplicable)
+                    {
                         CollectorStatus::Success
                     } else {
                         CollectorStatus::Partial
@@ -148,6 +152,7 @@ fn map_adapter(
     let device_id = checked_pci_u16(snapshot.device_id, format!("{base}/pci/device_id"), fields);
     let revision_id = checked_revision(snapshot.revision_id, &base, fields);
     let vendor = vendor_id.and_then(vendor_name).map(str::to_owned);
+    let software = snapshot.adapter_type == GpuAdapterType::Software;
 
     if vendor.is_none() {
         unavailable(
@@ -162,31 +167,56 @@ fn map_adapter(
         &snapshot.device_instance_id,
         fields,
         format!("{base}/device_instance_id"),
-        "device_instance_id_unavailable",
+        if software {
+            "device_instance_id_not_applicable"
+        } else {
+            "device_instance_id_unavailable"
+        },
+        missing_status(software),
     );
     record_missing(
         &snapshot.driver_version,
         fields,
         format!("{base}/driver/version"),
-        "driver_version_unavailable",
+        if software {
+            "driver_version_not_applicable"
+        } else {
+            "driver_version_unavailable"
+        },
+        missing_status(software),
     );
     record_missing(
         &snapshot.driver_date,
         fields,
         format!("{base}/driver/date"),
-        "driver_date_unavailable",
+        if software {
+            "driver_date_not_applicable"
+        } else {
+            "driver_date_unavailable"
+        },
+        missing_status(software),
     );
     record_missing(
         &snapshot.enabled,
         fields,
         format!("{base}/device_state/enabled"),
-        "device_enabled_state_unavailable",
+        if software {
+            "device_enabled_state_not_applicable"
+        } else {
+            "device_enabled_state_unavailable"
+        },
+        missing_status(software),
     );
     record_missing(
         &snapshot.problem_code,
         fields,
         format!("{base}/device_state/problem_code"),
-        "problem_code_unavailable",
+        if software {
+            "problem_code_not_applicable"
+        } else {
+            "problem_code_unavailable"
+        },
+        missing_status(software),
     );
 
     Gpu {
@@ -222,9 +252,18 @@ fn record_missing<T>(
     fields: &mut Vec<FieldCollectionResult>,
     path: String,
     code: &str,
+    status: FieldCollectionStatus,
 ) {
     if value.is_none() {
-        unavailable(fields, path, code, FieldCollectionStatus::SourceNull);
+        unavailable(fields, path, code, status);
+    }
+}
+
+fn missing_status(software: bool) -> FieldCollectionStatus {
+    if software {
+        FieldCollectionStatus::NotApplicable
+    } else {
+        FieldCollectionStatus::SourceNull
     }
 }
 
@@ -383,6 +422,7 @@ mod platform {
                 subsystem_id: description.SubSysId,
                 revision_id: description.Revision,
             };
+            let adapter_type = adapter_type(description.Flags);
             let details = match_device_details(
                 (
                     description.AdapterLuid.LowPart,
@@ -392,6 +432,7 @@ mod platform {
                 &device_details,
                 &mut messages,
                 index,
+                adapter_type,
             );
 
             snapshots.push(AdapterSnapshot {
@@ -403,7 +444,7 @@ mod platform {
                 dedicated_video_bytes: description.DedicatedVideoMemory as u64,
                 dedicated_system_bytes: description.DedicatedSystemMemory as u64,
                 shared_system_bytes: description.SharedSystemMemory as u64,
-                adapter_type: adapter_type(description.Flags),
+                adapter_type,
                 device_instance_id: details.and_then(|value| value.device_instance_id.clone()),
                 driver_version: details.and_then(|value| value.driver_version.clone()),
                 driver_date: details.and_then(|value| value.driver_date.clone()),
@@ -447,14 +488,19 @@ mod platform {
             }
 
             let device_instance_id = property_string(info.0, &data, &DEVPKEY_Device_InstanceId);
+            let pci = device_instance_id.as_deref().and_then(parse_pci_identity);
             let luid = match property_luid(info.0, &data, &DEVPKEY_Device_AdapterLuid) {
                 Ok(luid) => Some(luid),
                 Err(native_code) => {
-                    messages.push(setup_message(
-                        "setupapi_adapter_luid_unavailable",
-                        native_code,
-                        format!("表示デバイスのAdapter LUIDを取得できませんでした (index={index})"),
-                    ));
+                    if pci.is_none() {
+                        messages.push(setup_message(
+                            "setupapi_device_identity_unavailable",
+                            native_code,
+                            format!(
+                                "表示デバイスのLUIDとPCI識別子を取得できませんでした (index={index})"
+                            ),
+                        ));
+                    }
                     None
                 }
             };
@@ -462,7 +508,7 @@ mod platform {
 
             devices.push(DeviceDetails {
                 luid,
-                pci: device_instance_id.as_deref().and_then(parse_pci_identity),
+                pci,
                 device_instance_id,
                 driver_version: property_string(info.0, &data, &DEVPKEY_Device_DriverVersion),
                 driver_date: property_date(info.0, &data, &DEVPKEY_Device_DriverDate),
@@ -480,6 +526,7 @@ mod platform {
         devices: &'a [DeviceDetails],
         messages: &mut Vec<CollectionMessage>,
         adapter_index: u32,
+        adapter_type: GpuAdapterType,
     ) -> Option<&'a DeviceDetails> {
         let luid_matches: Vec<_> = devices
             .iter()
@@ -495,7 +542,18 @@ mod platform {
             .collect();
         match pci_matches.len() {
             1 => pci_matches.into_iter().next(),
-            0 => None,
+            0 => {
+                if adapter_type == GpuAdapterType::Hardware {
+                    messages.push(setup_message(
+                        "setupapi_device_match_not_found",
+                        None,
+                        format!(
+                            "DXGIアダプターに一致する表示デバイスがありません (adapter_index={adapter_index})"
+                        ),
+                    ));
+                }
+                None
+            }
             count => {
                 messages.push(setup_message(
                     "setupapi_pci_match_ambiguous",
@@ -730,6 +788,23 @@ mod tests {
         assert!(result.status.fields.is_empty());
         assert_eq!(gpu.driver.version.as_deref(), Some("32.0.15.1234"));
         assert_eq!(gpu.device_state.problem_code, Some(0));
+    }
+
+    #[test]
+    fn software_adapter_fields_are_not_applicable_and_do_not_make_collection_partial() {
+        let mut adapter = snapshot();
+        adapter.name = "Microsoft Basic Render Driver".into();
+        adapter.vendor_id = 0x1414;
+        adapter.adapter_type = GpuAdapterType::Software;
+
+        let result = build_result(success(vec![adapter]), 1);
+
+        assert_eq!(result.status.status, CollectorStatus::Success);
+        assert_eq!(result.status.fields.len(), 5);
+        assert!(result.status.fields.iter().all(|field| {
+            field.status == FieldCollectionStatus::NotApplicable
+                && field.code.ends_with("_not_applicable")
+        }));
     }
 
     #[test]
