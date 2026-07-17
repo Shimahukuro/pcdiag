@@ -3,6 +3,7 @@
 mod clock;
 mod cpu;
 mod devices;
+mod firmware;
 mod gpu;
 mod memory;
 mod partitions;
@@ -14,6 +15,7 @@ mod windows_info;
 pub use clock::{ClockCollectionResult, collect_clock};
 pub use cpu::{CpuCollectionResult, collect_cpu};
 pub use devices::{DeviceCollectionResult, collect_devices};
+pub use firmware::{FirmwareCollectionResult, collect_firmware};
 pub use gpu::{GpuCollectionResult, collect_gpus};
 pub use memory::{MemoryCollectionResult, collect_memory};
 pub use partitions::{PartitionCollectionResult, collect_partitions};

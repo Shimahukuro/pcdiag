@@ -1,12 +1,14 @@
 mod clock;
 mod cpu;
 mod device;
+mod firmware;
 mod gpu;
 mod memory;
 mod physical_disk;
 mod windows;
 
 pub use cpu::{CpuCollection, CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology};
+pub use firmware::{FirmwareCollection, FirmwareInterfaceType, FirmwareOperationalStatus};
 pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
 pub use physical_disk::{
@@ -26,6 +28,7 @@ pub struct Collection {
     pub windows: WindowsCollection,
     pub clock: ClockCollection,
     pub cpu: CpuCollection,
+    pub firmware: FirmwareCollection,
     pub memory: MemoryCollection,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub gpus: Option<Vec<Gpu>>,

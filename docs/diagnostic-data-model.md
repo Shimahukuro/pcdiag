@@ -464,12 +464,9 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 
 収集値を診断結果へ複写することで、診断時に使用した値を明確にする。読み込み時には、`kind`が`collected`の根拠について、`path`で解決した収集値と`value`が一致することを検証する。
 
-## 今後のカテゴリ設計順序
+## カテゴリ実装状況
 
-1. CPU
-2. BIOS・UEFI
-
-GPU、ストレージ、接続デバイス、Windows基本情報、時計情報は実装済みである。
+CPU、BIOS・UEFI、GPU、ストレージ、接続デバイス、Windows基本情報、時計情報は実装済みである。
 
 ## Windows基本情報カテゴリ
 
@@ -635,6 +632,53 @@ CPUデバイスの開始状態や問題コードは、既存の`devices`コレ�
 - 瞬間的なCPU使用率、プロセス別使用率
 - 動作クロック、最大クロック、オーバークロック判定
 - キャッシュ階層の詳細
+
+## BIOS・UEFIカテゴリ
+
+BIOS・UEFI情報は`firmware`へ保存し、コレクター名は`firmware`とする。機器のシリアル番号、資産番号、UUIDなどの識別情報は保存しない。
+
+```json
+{
+  "firmware": {
+    "vendor": "American Megatrends International, LLC.",
+    "version": "1.90",
+    "release_date": "2026-07-17",
+    "interface_type": "uefi",
+    "secure_boot_enabled": true,
+    "status": null
+  }
+}
+```
+
+### 各項目
+
+- `vendor`: Windowsが報告するBIOS・UEFIベンダー名。
+- `version`: Windowsが報告するBIOS・UEFIバージョン。複数文字列として保存されている場合は、元の順序を保って` / `で連結する。
+- `release_date`: BIOS・UEFI公開日。取得値を検証して`YYYY-MM-DD`へ正規化する。
+- `interface_type`: 現在のWindowsが起動したファームウェア方式。`bios`、`uefi`、`unknown`のいずれか。
+- `secure_boot_enabled`: Windowsが報告するSecure Bootの有効状態。Legacy BIOSでは`null`とし、`not_applicable`を記録する。
+- `status`: ファームウェア全体の稼働状態。将来値を保存する場合は`ok`、`degraded`、`error`、`unknown`のいずれかとする。初期実装では信頼できる一般的な取得元を採用しないため`null`とし、`unsupported`を記録する。
+
+`firmware`オブジェクトと6つのキーは省略しない。取得不能値は`null`とし、対応するJSON Pointer、取得状態、理由コードを`status.json`へ記録する。
+
+### Windows実装方針
+
+- `vendor`、`version`、`release_date`は、`HKEY_LOCAL_MACHINE\\HARDWARE\\DESCRIPTION\\System\\BIOS`にWindowsが公開する特定の値だけを読み取る。
+- `interface_type`は`GetFirmwareType`を使用する。
+- `secure_boot_enabled`はUEFI起動時に、`HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\SecureBoot\\State`の`UEFISecureBootEnabled`を読み取る。
+- WMI、PowerShell、外部コマンドは初期実装の必須取得経路にしない。
+- ファームウェア表、任意のレジストリ、生のファームウェア変数は収集しない。
+
+BIOS公開日の元データが空または日付として不正な場合は、推測や補正をせず`null`と`invalid_value`を記録する。Secure Bootの値が存在しない場合も、無効と推測せず`null`と取得状態を記録する。
+
+### 初期実装の対象外
+
+- BIOS・UEFI設定値の列挙および変更
+- ファームウェア更新の自動実行
+- シリアル番号、資産番号、システムUUID
+- SMBIOSテーブルの生データ
+- TPMの詳細情報
+- BIOSパスワードの状態
 - マイクロコードリビジョン
 - ベンダー固有ドライバーまたは管理ツールによる情報
 

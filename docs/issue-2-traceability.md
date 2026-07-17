@@ -98,7 +98,7 @@ Issue #2「CLI基本仕様」に記載された要求が、データモデル、
 | リリース日 | `/firmware/release_date` | `firmware` | 診断根拠候補 | ファームウェア |
 | BIOS・UEFI区分 | `/firmware/interface_type` | `firmware` | 診断根拠 | ファームウェア |
 | Secure Boot | `/firmware/secure_boot_enabled` | `firmware` | 診断対象候補 | ファームウェア |
-| ファームウェア状態 | `/firmware/status` | `firmware` | 診断対象候補 | ファームウェア |
+| ファームウェア状態 | `/firmware/status` | `firmware` | 初期実装は取得対象外として理由を記録 | ファームウェア |
 
 ## デバイス
 

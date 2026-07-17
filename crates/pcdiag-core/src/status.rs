@@ -6,6 +6,7 @@ pub enum CollectorName {
     Windows,
     Clock,
     Cpu,
+    Firmware,
     Memory,
     Gpu,
     Devices,

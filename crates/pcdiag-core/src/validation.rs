@@ -46,6 +46,15 @@ const CPU_FAILURE_PATHS: [&str; 9] = [
     "/cpu/features/hypervisor_present",
 ];
 
+const FIRMWARE_PATHS: [&str; 6] = [
+    "/firmware/vendor",
+    "/firmware/version",
+    "/firmware/release_date",
+    "/firmware/interface_type",
+    "/firmware/secure_boot_enabled",
+    "/firmware/status",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub path: String,
@@ -119,6 +128,32 @@ impl Collection {
                 &mut errors,
                 "/clock/hardware_clock/time_utc",
                 "must be a UTC date-time ending in Z",
+            );
+        }
+        for (path, value) in [
+            ("/firmware/vendor", self.firmware.vendor.as_deref()),
+            ("/firmware/version", self.firmware.version.as_deref()),
+        ] {
+            if value == Some("") {
+                push_error(&mut errors, path, "must not be empty");
+            }
+        }
+        if let Some(release_date) = &self.firmware.release_date
+            && !is_iso_date(release_date)
+        {
+            push_error(
+                &mut errors,
+                "/firmware/release_date",
+                "must be a valid YYYY-MM-DD date",
+            );
+        }
+        if self.firmware.interface_type == Some(crate::FirmwareInterfaceType::Bios)
+            && self.firmware.secure_boot_enabled.is_some()
+        {
+            push_error(
+                &mut errors,
+                "/firmware/secure_boot_enabled",
+                "must be null when interface_type is bios",
             );
         }
         let topology = &self.cpu.topology;
@@ -495,6 +530,20 @@ impl Collection {
         } else if let Some(collector) = cpu_collectors.first() {
             validate_cpu_status(self, collector, &mut errors);
         }
+        let firmware_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Firmware)
+            .collect();
+        if firmware_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one firmware collector result",
+            );
+        } else if let Some(collector) = firmware_collectors.first() {
+            validate_firmware_status(self, collector, &mut errors);
+        }
         let memory_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -581,6 +630,90 @@ impl Collection {
             &mut errors,
         );
         finish(errors)
+    }
+}
+
+fn validate_firmware_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let value = serde_json::to_value(&collection.firmware).expect("firmware model is serializable");
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            for field in &collector.fields {
+                validate_null_field_result(&value, field, "/firmware", errors);
+            }
+            for path in FIRMWARE_PATHS {
+                let relative = path.strip_prefix("/firmware").unwrap_or(path);
+                if value.pointer(relative).is_some_and(Value::is_null)
+                    && !collector.fields.iter().any(|field| field.path == path)
+                {
+                    push_error(
+                        errors,
+                        path,
+                        "null value requires a field collection result",
+                    );
+                }
+            }
+            if collector.status == CollectorStatus::Success
+                && (!collector.fields.is_empty() || !collector.messages.is_empty())
+            {
+                push_error(
+                    errors,
+                    "/collectors/firmware/status",
+                    "successful firmware collector must not contain failures",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if FIRMWARE_PATHS.iter().any(|path| {
+                let relative = path.strip_prefix("/firmware").unwrap_or(path);
+                value
+                    .pointer(relative)
+                    .is_some_and(|value| !value.is_null())
+            }) {
+                push_error(
+                    errors,
+                    "/firmware",
+                    "skipped or failed firmware collector requires all values to be null",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/firmware/messages",
+                    "skipped or failed firmware collector must include a reason",
+                );
+            }
+        }
+    }
+}
+
+fn is_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let Ok(year) = value[0..4].parse::<u32>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u32>() else {
+        return false;
+    };
+    let Ok(day) = value[8..10].parse::<u32>() else {
+        return false;
+    };
+    year > 0 && (1..=12).contains(&month) && day > 0 && day <= days_in_month(year, month)
+}
+
+#[allow(clippy::manual_is_multiple_of)]
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => 31,
     }
 }
 
@@ -1439,8 +1572,9 @@ mod tests {
         ClockCollection, CollectionMessage, CollectorStatus, CommitMemory, CpuCollection,
         CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, Criterion, DiagnosisSummary,
         EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
-        MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation, RuleEvaluation,
-        RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
+        FirmwareCollection, FirmwareInterfaceType, MeasurementUnit, MemoryCollection,
+        PhysicalMemory, Recommendation, RuleEvaluation, RuleSetInfo, Severity, StorageCollection,
+        VirtualMemory, WindowsCollection,
     };
 
     #[test]
@@ -1552,6 +1686,7 @@ mod tests {
             windows: windows_collection(),
             clock: clock_collection(),
             cpu: cpu_collection(),
+            firmware: firmware_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: Some(17_179_869_184),
@@ -1583,6 +1718,7 @@ mod tests {
             windows: windows_collection(),
             clock: clock_collection(),
             cpu: cpu_collection(),
+            firmware: firmware_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: None,
@@ -1655,6 +1791,17 @@ mod tests {
                 virtualization_firmware_enabled: Some(true),
                 hypervisor_present: Some(false),
             },
+        }
+    }
+
+    fn firmware_collection() -> FirmwareCollection {
+        FirmwareCollection {
+            vendor: Some("Example Vendor".into()),
+            version: Some("1.2.3".into()),
+            release_date: Some("2026-07-17".into()),
+            interface_type: Some(FirmwareInterfaceType::Uefi),
+            secure_boot_enabled: Some(true),
+            status: None,
         }
     }
 
