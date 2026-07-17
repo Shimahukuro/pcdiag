@@ -553,7 +553,9 @@ PCI識別子はJSON上では数値で保存する。画面やHTMLレポートで
 
 `driver.date`は時刻を含まない日付として`YYYY-MM-DD`形式で保存する。情報源が有効な日付を返さない場合は`null`とする。
 
-Windows実装では、DXGIのAdapter LUIDとSetupAPIの`DEVPKEY_Device_AdapterLuid`を照合して同一アダプターを特定する。PCI識別子だけでは同型GPUを複数搭載した環境を一意に照合できないため、結合キーには使用しない。
+Windows実装では、DXGIのAdapter LUIDとSetupAPIの`DEVPKEY_Device_AdapterLuid`を最優先で照合して同一アダプターを特定する。
+
+Adapter LUIDを取得できない環境では、デバイスインスタンスIDから`VEN`、`DEV`、`SUBSYS`、`REV`を解析し、DXGIのPCI識別子と完全一致する候補が1件だけの場合に限って結合する。同じ識別子を持つ候補が複数存在する場合は、誤った情報を結合せず、対象フィールドを`null`とする。
 
 デバイスインスタンスID、ドライバーバージョン、ドライバー日付、デバイス開始状態、問題コードは、対応するSetupAPIデバイスプロパティから取得する。DXGIアダプターに対応するデバイス情報が見つからない場合は、対象フィールドを`null`とし、`status.json`へ理由を記録する。
 

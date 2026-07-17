@@ -43,6 +43,50 @@ struct EnumerationSuccess {
     messages: Vec<CollectionMessage>,
 }
 
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PciIdentity {
+    vendor_id: u32,
+    device_id: u32,
+    subsystem_id: u32,
+    revision_id: u32,
+}
+
+#[cfg(any(windows, test))]
+fn parse_pci_identity(device_instance_id: &str) -> Option<PciIdentity> {
+    let value = device_instance_id.to_ascii_uppercase();
+    let mut vendor_id = None;
+    let mut device_id = None;
+    let mut subsystem_id = None;
+    let mut revision_id = None;
+
+    for component in value.split(['\\', '&']) {
+        if let Some(value) = component.strip_prefix("VEN_") {
+            vendor_id = parse_hex(value, 4);
+        } else if let Some(value) = component.strip_prefix("DEV_") {
+            device_id = parse_hex(value, 4);
+        } else if let Some(value) = component.strip_prefix("SUBSYS_") {
+            subsystem_id = parse_hex(value, 8);
+        } else if let Some(value) = component.strip_prefix("REV_") {
+            revision_id = parse_hex(value, 2);
+        }
+    }
+
+    Some(PciIdentity {
+        vendor_id: vendor_id?,
+        device_id: device_id?,
+        subsystem_id: subsystem_id?,
+        revision_id: revision_id?,
+    })
+}
+
+#[cfg(any(windows, test))]
+fn parse_hex(value: &str, digits: usize) -> Option<u32> {
+    (value.len() == digits)
+        .then(|| u32::from_str_radix(value, 16).ok())
+        .flatten()
+}
+
 pub fn collect_gpus() -> GpuCollectionResult {
     let started = Instant::now();
     build_result(platform::enumerate_adapters(), elapsed_ms(started))
@@ -274,11 +318,14 @@ mod platform {
     use windows::Win32::System::Time::FileTimeToSystemTime;
     use windows::core::PCWSTR;
 
-    use super::{AdapterSnapshot, EnumerationFailure, EnumerationSuccess};
+    use super::{
+        AdapterSnapshot, EnumerationFailure, EnumerationSuccess, PciIdentity, parse_pci_identity,
+    };
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct DeviceDetails {
-        luid: (u32, i32),
+        luid: Option<(u32, i32)>,
+        pci: Option<PciIdentity>,
         device_instance_id: Option<String>,
         driver_version: Option<String>,
         driver_date: Option<String>,
@@ -330,13 +377,22 @@ mod platform {
                 .iter()
                 .position(|character| *character == 0)
                 .unwrap_or(description.Description.len());
-            let details = device_details.iter().find(|details| {
-                details.luid
-                    == (
-                        description.AdapterLuid.LowPart,
-                        description.AdapterLuid.HighPart,
-                    )
-            });
+            let pci = PciIdentity {
+                vendor_id: description.VendorId,
+                device_id: description.DeviceId,
+                subsystem_id: description.SubSysId,
+                revision_id: description.Revision,
+            };
+            let details = match_device_details(
+                (
+                    description.AdapterLuid.LowPart,
+                    description.AdapterLuid.HighPart,
+                ),
+                pci,
+                &device_details,
+                &mut messages,
+                index,
+            );
 
             snapshots.push(AdapterSnapshot {
                 name: String::from_utf16_lossy(&description.Description[..name_end]),
@@ -390,22 +446,24 @@ mod platform {
                 Err(error) => return Err(error),
             }
 
+            let device_instance_id = property_string(info.0, &data, &DEVPKEY_Device_InstanceId);
             let luid = match property_luid(info.0, &data, &DEVPKEY_Device_AdapterLuid) {
-                Ok(luid) => luid,
+                Ok(luid) => Some(luid),
                 Err(native_code) => {
                     messages.push(setup_message(
                         "setupapi_adapter_luid_unavailable",
                         native_code,
                         format!("表示デバイスのAdapter LUIDを取得できませんでした (index={index})"),
                     ));
-                    continue;
+                    None
                 }
             };
             let status = property_u32(info.0, &data, &DEVPKEY_Device_DevNodeStatus);
 
             devices.push(DeviceDetails {
                 luid,
-                device_instance_id: property_string(info.0, &data, &DEVPKEY_Device_InstanceId),
+                pci: device_instance_id.as_deref().and_then(parse_pci_identity),
+                device_instance_id,
                 driver_version: property_string(info.0, &data, &DEVPKEY_Device_DriverVersion),
                 driver_date: property_date(info.0, &data, &DEVPKEY_Device_DriverDate),
                 enabled: status.map(|status| status & DN_STARTED.0 != 0),
@@ -414,6 +472,41 @@ mod platform {
         }
 
         Ok((devices, messages))
+    }
+
+    fn match_device_details<'a>(
+        luid: (u32, i32),
+        pci: PciIdentity,
+        devices: &'a [DeviceDetails],
+        messages: &mut Vec<CollectionMessage>,
+        adapter_index: u32,
+    ) -> Option<&'a DeviceDetails> {
+        let luid_matches: Vec<_> = devices
+            .iter()
+            .filter(|details| details.luid == Some(luid))
+            .collect();
+        if luid_matches.len() == 1 {
+            return luid_matches.into_iter().next();
+        }
+
+        let pci_matches: Vec<_> = devices
+            .iter()
+            .filter(|details| details.pci == Some(pci))
+            .collect();
+        match pci_matches.len() {
+            1 => pci_matches.into_iter().next(),
+            0 => None,
+            count => {
+                messages.push(setup_message(
+                    "setupapi_pci_match_ambiguous",
+                    None,
+                    format!(
+                        "PCI識別子が一致する表示デバイスが複数あります (adapter_index={adapter_index}, candidates={count})"
+                    ),
+                ));
+                None
+            }
+        }
     }
 
     fn property_bytes(
@@ -552,6 +645,23 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_pci_identity_from_a_device_instance_id() {
+        let identity =
+            parse_pci_identity("PCI\\VEN_10DE&DEV_1FB9&SUBSYS_09061028&REV_A1\\4&123456&0&0008")
+                .unwrap();
+
+        assert_eq!(identity.vendor_id, 0x10DE);
+        assert_eq!(identity.device_id, 0x1FB9);
+        assert_eq!(identity.subsystem_id, 0x0906_1028);
+        assert_eq!(identity.revision_id, 0xA1);
+    }
+
+    #[test]
+    fn incomplete_pci_identity_is_rejected() {
+        assert!(parse_pci_identity("PCI\\VEN_10DE&DEV_1FB9\\TEST").is_none());
+    }
 
     #[test]
     fn maps_dxgi_adapter_to_the_shared_gpu_model() {
