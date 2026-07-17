@@ -1,10 +1,11 @@
 use pcdiag_windows::{
     collect_devices, collect_gpus, collect_memory, collect_partitions, collect_physical_disks,
-    collect_smart, collect_volumes,
+    collect_smart, collect_volumes, collect_windows_info,
 };
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let windows = collect_windows_info();
     let memory = collect_memory();
     let gpus = collect_gpus();
     let devices = collect_devices();
@@ -14,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let smart = collect_smart();
     let output = json!({
         "collection": {
+            "windows": windows.collection,
             "memory": memory.collection,
             "gpus": gpus.collection,
             "devices": devices.collection,
@@ -26,6 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         "status": {
             "collectors": [
+                windows.status,
                 memory.status,
                 gpus.status,
                 devices.status,

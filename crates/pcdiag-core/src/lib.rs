@@ -6,10 +6,11 @@ pub mod status;
 pub mod validation;
 
 pub use collection::{
-    Collection, CommitMemory, ConnectedDevice, DeviceDriver, DeviceState, DiskBusType,
+    BootMode, Collection, CommitMemory, ConnectedDevice, DeviceDriver, DeviceState, DiskBusType,
     DiskPartition, DiskSmart, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory,
     GpuPciIdentifiers, MemoryCollection, PartitionStyle, PhysicalDisk, PhysicalMemory,
-    SmartProtocol, StorageCollection, StorageVolume, VirtualMemory, VolumeExtent,
+    SmartProtocol, StorageCollection, StorageVolume, SystemArchitecture, VirtualMemory,
+    VolumeExtent, WindowsCollection,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,

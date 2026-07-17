@@ -466,14 +466,43 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 
 ## 今後のカテゴリ設計順序
 
-1. GPU
-2. ストレージ
-3. 接続デバイス
-4. Windowsと時計
-5. CPU
-6. BIOS・UEFI
+1. 時計
+2. CPU
+3. BIOS・UEFI
 
-GPUでは、複数要素、配列参照、取得不能テレメトリー、ドライバー情報を使ってモデルを検証する。
+GPU、ストレージ、接続デバイス、Windows基本情報は実装済みである。時計情報はWindows基本情報と分離し、システム時刻とハードウェアRTCを混同しない構造で設計する。
+
+## Windows基本情報カテゴリ
+
+Windows基本情報は`windows`へ保存し、コレクター名は`windows`とする。
+
+```json
+{
+  "windows": {
+    "edition": "Professional",
+    "version": "10.0.26100",
+    "build_number": 26100,
+    "architecture": "x86_64",
+    "booted_at": "2026-07-17T00:00:00.000Z",
+    "uptime_ms": 123000,
+    "boot_mode": "uefi"
+  }
+}
+```
+
+- `edition`: `GetProductInfo`が報告した製品種別を表示名へ変換する。既知でない製品種別は`product_<番号>`として情報を失わず保存する。
+- `version`: メジャー、マイナー、ビルド番号を`<major>.<minor>.<build>`形式で保存する。
+- `build_number`: Windowsのビルド番号を数値で保存する。
+- `architecture`: `x86`、`x86_64`、`arm`、`arm64`、`unknown`のいずれかとする。
+- `booted_at`: 収集時のWindowsシステム時刻から稼働時間を引いて算出し、UTCのRFC 3339形式で保存する。
+- `uptime_ms`: Windows起動後の経過時間をミリ秒で保存する。
+- `boot_mode`: `bios`、`uefi`、`unknown`のいずれかとする。
+
+Windows実装では、マニフェストの影響を受けず実際のOSバージョンを取得するため`RtlGetVersion`を使用する。システムアーキテクチャは`GetNativeSystemInfo`、稼働時間は`GetTickCount64`、起動方式は`GetFirmwareType`を使用する。
+
+取得できない値は`null`とし、対応する`/windows/...`のJSON Pointerと理由を`status.json`へ記録する。一部だけ取得できない場合も取得済み情報を保持してコレクターを`partial`とする。
+
+`booted_at`はWindowsのシステム時刻を基準にした算出値であり、ハードウェアRTCが保持する時刻ではない。システム時刻、UTCオフセット、Windows Timeサービス、ハードウェアRTCは、後続の時計情報カテゴリで別に収集する。
 
 ## GPUカテゴリ
 

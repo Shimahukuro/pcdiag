@@ -1,4 +1,5 @@
 {
+  "windows": {"edition": null, "version": null, "build_number": null, "architecture": null, "booted_at": null, "uptime_ms": null, "boot_mode": null},
   "memory": {
     "physical": {
       "total_bytes": null,

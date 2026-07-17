@@ -1,4 +1,5 @@
 {
+  "windows": {"edition": "Professional", "version": "10.0.26100", "build_number": 26100, "architecture": "x86_64", "booted_at": "2026-07-17T00:00:00.000Z", "uptime_ms": 123000, "boot_mode": "uefi"},
   "memory": {
     "physical": {
       "total_bytes": 17179869184,

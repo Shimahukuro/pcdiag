@@ -17,6 +17,16 @@ const MEMORY_PATHS: [&str; 7] = [
     "/memory/virtual/available_bytes",
 ];
 
+const WINDOWS_PATHS: [&str; 7] = [
+    "/windows/edition",
+    "/windows/version",
+    "/windows/build_number",
+    "/windows/architecture",
+    "/windows/booted_at",
+    "/windows/uptime_ms",
+    "/windows/boot_mode",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidationError {
     pub path: String,
@@ -43,6 +53,25 @@ impl std::error::Error for ValidationErrors {}
 impl Collection {
     pub fn validate(&self) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
+        if self.windows.version.as_deref() == Some("") {
+            push_error(&mut errors, "/windows/version", "must not be empty");
+        }
+        if self.windows.build_number == Some(0) {
+            push_error(
+                &mut errors,
+                "/windows/build_number",
+                "must be greater than zero",
+            );
+        }
+        if let Some(booted_at) = &self.windows.booted_at
+            && (!booted_at.contains('T') || !booted_at.ends_with('Z'))
+        {
+            push_error(
+                &mut errors,
+                "/windows/booted_at",
+                "must be a UTC date-time ending in Z",
+            );
+        }
         let physical = &self.memory.physical;
 
         if let Some(load) = physical.load_percent
@@ -237,6 +266,20 @@ impl Collection {
 
     pub fn validate_with_status(&self, status: &CollectionStatus) -> Result<(), ValidationErrors> {
         let mut errors = self.validate().err().map_or_else(Vec::new, |e| e.0);
+        let windows_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Windows)
+            .collect();
+        if windows_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one Windows collector result",
+            );
+        } else if let Some(collector) = windows_collectors.first() {
+            validate_windows_status(self, collector, &mut errors);
+        }
         let memory_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -323,6 +366,92 @@ impl Collection {
             &mut errors,
         );
         finish(errors)
+    }
+}
+
+fn validate_windows_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let value = serde_json::to_value(&collection.windows).expect("Windows model is serializable");
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            for field in &collector.fields {
+                validate_null_field_result(&value, field, "/windows", errors);
+            }
+            for path in WINDOWS_PATHS {
+                let relative = path.strip_prefix("/windows").unwrap_or(path);
+                if value.pointer(relative).is_some_and(Value::is_null)
+                    && !collector.fields.iter().any(|field| field.path == path)
+                {
+                    push_error(
+                        errors,
+                        path,
+                        "null value requires a field collection result",
+                    );
+                }
+            }
+            if collector.status == CollectorStatus::Success
+                && (!collector.fields.is_empty() || !collector.messages.is_empty())
+            {
+                push_error(
+                    errors,
+                    "/collectors/windows/status",
+                    "successful Windows collector must not contain failures",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if WINDOWS_PATHS.iter().any(|path| {
+                let relative = path.strip_prefix("/windows").unwrap_or(path);
+                value
+                    .pointer(relative)
+                    .is_some_and(|value| !value.is_null())
+            }) {
+                push_error(
+                    errors,
+                    "/windows",
+                    "skipped or failed Windows collector requires all values to be null",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/windows/messages",
+                    "skipped or failed Windows collector must include a reason",
+                );
+            }
+        }
+    }
+}
+
+fn validate_null_field_result(
+    value: &Value,
+    field: &crate::FieldCollectionResult,
+    base: &str,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(relative) = field.path.strip_prefix(base) else {
+        push_error(
+            errors,
+            &field.path,
+            "field collection status refers to an unknown path",
+        );
+        return;
+    };
+    match value.pointer(relative) {
+        Some(Value::Null) => {}
+        Some(_) => push_error(
+            errors,
+            &field.path,
+            "field collection status must refer to a null value",
+        ),
+        None => push_error(
+            errors,
+            &field.path,
+            "field collection status refers to an unknown path",
+        ),
     }
 }
 
@@ -971,7 +1100,7 @@ mod tests {
         CollectionMessage, CollectorStatus, CommitMemory, Criterion, DiagnosisSummary,
         EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
         MeasurementUnit, MemoryCollection, PhysicalMemory, Recommendation, RuleEvaluation,
-        RuleSetInfo, Severity, StorageCollection, VirtualMemory,
+        RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
     };
 
     #[test]
@@ -1080,6 +1209,7 @@ mod tests {
 
     fn complete_collection() -> Collection {
         Collection {
+            windows: windows_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: Some(17_179_869_184),
@@ -1108,6 +1238,7 @@ mod tests {
 
     fn null_collection() -> Collection {
         Collection {
+            windows: windows_collection(),
             memory: MemoryCollection {
                 physical: PhysicalMemory {
                     total_bytes: None,
@@ -1131,6 +1262,18 @@ mod tests {
                 volumes: Some(vec![]),
                 smart: Some(vec![]),
             },
+        }
+    }
+
+    fn windows_collection() -> WindowsCollection {
+        WindowsCollection {
+            edition: Some("Professional".into()),
+            version: Some("10.0.26100".into()),
+            build_number: Some(26_100),
+            architecture: Some(crate::SystemArchitecture::X86_64),
+            booted_at: Some("2026-07-17T00:00:00.000Z".into()),
+            uptime_ms: Some(123_000),
+            boot_mode: Some(crate::BootMode::Uefi),
         }
     }
 
