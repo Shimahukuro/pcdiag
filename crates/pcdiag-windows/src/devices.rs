@@ -165,6 +165,18 @@ fn elapsed_ms(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
+#[cfg(any(windows, test))]
+fn format_guid(value: u128) -> String {
+    format!(
+        "{{{:08x}-{:04x}-{:04x}-{:04x}-{:012x}}}",
+        value >> 96,
+        (value >> 80) & 0xffff,
+        (value >> 64) & 0xffff,
+        (value >> 48) & 0xffff,
+        value & 0xffff_ffff_ffff,
+    )
+}
+
 #[cfg(windows)]
 mod platform {
     use std::mem::size_of;
@@ -183,7 +195,7 @@ mod platform {
     use windows::Win32::System::Time::FileTimeToSystemTime;
     use windows::core::PCWSTR;
 
-    use super::{DeviceSnapshot, EnumerationFailure};
+    use super::{DeviceSnapshot, EnumerationFailure, format_guid};
 
     struct DeviceInfoSet(HDEVINFO);
 
@@ -220,7 +232,7 @@ mod platform {
                     .or_else(|| property_string(info.0, &data, &DEVPKEY_Device_DeviceDesc)),
                 manufacturer: property_string(info.0, &data, &DEVPKEY_Device_Manufacturer),
                 class: property_string(info.0, &data, &DEVPKEY_Device_Class),
-                class_guid: Some(format!("{{{}}}", data.ClassGuid)),
+                class_guid: Some(format_guid(data.ClassGuid.to_u128())),
                 device_instance_id: property_string(info.0, &data, &DEVPKEY_Device_InstanceId),
                 present: property_bool(info.0, &data, &DEVPKEY_Device_IsPresent),
                 enabled: status.map(|value| value & DN_STARTED.0 != 0),
@@ -343,6 +355,14 @@ mod tests {
 
         assert_eq!(result.status.status, CollectorStatus::Partial);
         assert_eq!(result.status.fields[0].path, "/devices/0/driver/date");
+    }
+
+    #[test]
+    fn formats_guid_in_windows_registry_style() {
+        assert_eq!(
+            format_guid(0x4d36e968_e325_11ce_bfc1_08002be10318),
+            "{4d36e968-e325-11ce-bfc1-08002be10318}"
+        );
     }
 
     fn snapshot() -> DeviceSnapshot {
