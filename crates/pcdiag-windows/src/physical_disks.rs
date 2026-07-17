@@ -5,6 +5,9 @@ use pcdiag_core::{
     FieldCollectionResult, FieldCollectionStatus, PhysicalDisk,
 };
 
+#[cfg(windows)]
+pub(crate) use platform::{enumerate_disk_numbers, open_disk};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhysicalDiskCollectionResult {
     pub collection: Option<Vec<PhysicalDisk>>,
@@ -193,7 +196,7 @@ mod platform {
 
     const IOCTL_BUFFER_SIZE: usize = 4096;
 
-    struct OwnedHandle(HANDLE);
+    pub(crate) struct OwnedHandle(pub(crate) HANDLE);
 
     impl Drop for OwnedHandle {
         fn drop(&mut self) {
@@ -226,7 +229,7 @@ mod platform {
         Ok(EnumerationResult { disks, messages })
     }
 
-    fn enumerate_disk_numbers() -> windows::core::Result<Vec<u32>> {
+    pub(crate) fn enumerate_disk_numbers() -> windows::core::Result<Vec<u32>> {
         let mut capacity = 4096;
         loop {
             let mut buffer = vec![0_u16; capacity];
@@ -253,7 +256,7 @@ mod platform {
         }
     }
 
-    fn open_disk(number: u32) -> windows::core::Result<OwnedHandle> {
+    pub(crate) fn open_disk(number: u32) -> windows::core::Result<OwnedHandle> {
         let path: Vec<u16> = format!(r"\\.\PhysicalDrive{number}")
             .encode_utf16()
             .chain(Some(0))

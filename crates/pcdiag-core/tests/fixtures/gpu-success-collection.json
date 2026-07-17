@@ -43,5 +43,5 @@
     }
   ],
   "devices": [],
-  "storage": {"disks": []}
+  "storage": {"disks": [], "partitions": [], "volumes": []}
 }

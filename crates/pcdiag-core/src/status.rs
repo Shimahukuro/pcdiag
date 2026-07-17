@@ -7,6 +7,8 @@ pub enum CollectorName {
     Gpu,
     Devices,
     PhysicalDisks,
+    Partitions,
+    Volumes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

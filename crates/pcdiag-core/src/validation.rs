@@ -116,6 +116,78 @@ impl Collection {
                 }
             }
         }
+        if let Some(partitions) = &self.storage.partitions {
+            let mut identities = HashSet::new();
+            for (index, partition) in partitions.iter().enumerate() {
+                if !identities.insert((partition.disk_number, partition.partition_number)) {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/partitions/{index}/partition_number"),
+                        "disk number and partition number must be unique",
+                    );
+                }
+                if partition.length_bytes == 0 {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/partitions/{index}/length_bytes"),
+                        "must be greater than zero",
+                    );
+                }
+                validate_storage_range(
+                    &mut errors,
+                    &format!("/storage/partitions/{index}"),
+                    partition.disk_number,
+                    partition.offset_bytes,
+                    partition.length_bytes,
+                    self.storage.disks.as_deref(),
+                );
+            }
+        }
+        if let Some(volumes) = &self.storage.volumes {
+            let mut mount_points = HashSet::new();
+            for (index, volume) in volumes.iter().enumerate() {
+                if let (Some(free), Some(capacity)) = (volume.free_bytes, volume.capacity_bytes)
+                    && free > capacity
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/storage/volumes/{index}/free_bytes"),
+                        "must not be greater than capacity_bytes",
+                    );
+                }
+                if let Some(volume_mount_points) = &volume.mount_points {
+                    for mount_point in volume_mount_points {
+                        if !mount_points.insert(mount_point) {
+                            push_error(
+                                &mut errors,
+                                format!("/storage/volumes/{index}/mount_points"),
+                                "mount points must be unique within the volume collection",
+                            );
+                        }
+                    }
+                }
+                if let Some(extents) = &volume.extents {
+                    for (extent_index, extent) in extents.iter().enumerate() {
+                        let base = format!("/storage/volumes/{index}/extents/{extent_index}");
+                        if extent.length_bytes == 0 {
+                            push_error(
+                                &mut errors,
+                                format!("{base}/length_bytes"),
+                                "must be greater than zero",
+                            );
+                        }
+                        validate_storage_range(
+                            &mut errors,
+                            &base,
+                            extent.disk_number,
+                            extent.offset_bytes,
+                            extent.length_bytes,
+                            self.storage.disks.as_deref(),
+                        );
+                    }
+                }
+            }
+        }
         validate_available_not_greater_than_total(
             &mut errors,
             "/memory/commit",
@@ -192,7 +264,132 @@ impl Collection {
         } else if let Some(collector) = disk_collectors.first() {
             validate_physical_disk_status(self, collector, &mut errors);
         }
+        validate_single_storage_collector(
+            self,
+            status,
+            CollectorName::Partitions,
+            "/storage/partitions",
+            self.storage.partitions.is_some(),
+            true,
+            &mut errors,
+        );
+        validate_single_storage_collector(
+            self,
+            status,
+            CollectorName::Volumes,
+            "/storage/volumes",
+            self.storage.volumes.is_some(),
+            false,
+            &mut errors,
+        );
         finish(errors)
+    }
+}
+
+fn validate_single_storage_collector(
+    collection: &Collection,
+    status: &CollectionStatus,
+    name: CollectorName,
+    collection_path: &str,
+    collection_is_some: bool,
+    success_allows_not_applicable: bool,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collector_path = match name {
+        CollectorName::Partitions => "/collectors/partitions",
+        CollectorName::Volumes => "/collectors/volumes",
+        _ => "/collectors",
+    };
+    let collectors: Vec<_> = status
+        .collectors
+        .iter()
+        .filter(|collector| collector.name == name)
+        .collect();
+    if collectors.len() > 1 {
+        push_error(
+            errors,
+            "/collectors",
+            format!("must not contain more than one {name:?} collector result"),
+        );
+        return;
+    }
+    let Some(collector) = collectors.first() else {
+        return;
+    };
+    let collection_value = serde_json::to_value(collection).expect("collection must serialize");
+
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            if !collection_is_some {
+                push_error(
+                    errors,
+                    collection_path,
+                    "successful or partial collector requires an array",
+                );
+                return;
+            }
+            for field in &collector.fields {
+                match collection_value.pointer(&field.path) {
+                    Some(Value::Null) => {}
+                    Some(_) => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status must refer to a null value",
+                    ),
+                    None => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status refers to an unknown path",
+                    ),
+                }
+            }
+            if let Some(value) = collection_value.pointer(collection_path) {
+                let mut null_paths = Vec::new();
+                collect_null_paths(value, collection_path, &mut null_paths);
+                for path in null_paths {
+                    if !collector.fields.iter().any(|field| field.path == path) {
+                        push_error(
+                            errors,
+                            path,
+                            "null storage value must have a field collection status",
+                        );
+                    }
+                }
+            }
+            if collector.status == CollectorStatus::Success {
+                let invalid_field = if success_allows_not_applicable {
+                    collector
+                        .fields
+                        .iter()
+                        .any(|field| field.status != crate::FieldCollectionStatus::NotApplicable)
+                } else {
+                    !collector.fields.is_empty()
+                };
+                if invalid_field || !collector.messages.is_empty() {
+                    push_error(
+                        errors,
+                        format!("{collector_path}/status"),
+                        "success contains collection failures",
+                    );
+                }
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if collection_is_some {
+                push_error(
+                    errors,
+                    collection_path,
+                    "skipped or failed collector requires a null collection",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    format!("{collector_path}/messages"),
+                    "skipped or failed collector must include a reason",
+                );
+            }
+        }
     }
 }
 
@@ -675,6 +872,36 @@ fn validate_available_not_greater_than_total(
     }
 }
 
+fn validate_storage_range(
+    errors: &mut Vec<ValidationError>,
+    base: &str,
+    disk_number: u32,
+    offset: u64,
+    length: u64,
+    disks: Option<&[crate::PhysicalDisk]>,
+) {
+    let Some(disks) = disks else {
+        return;
+    };
+    let Some(disk) = disks.iter().find(|disk| disk.number == disk_number) else {
+        push_error(
+            errors,
+            format!("{base}/disk_number"),
+            "must refer to a collected physical disk",
+        );
+        return;
+    };
+    if let Some(capacity) = disk.capacity_bytes
+        && offset.checked_add(length).is_none_or(|end| end > capacity)
+    {
+        push_error(
+            errors,
+            format!("{base}/length_bytes"),
+            "range must fit within the referenced physical disk",
+        );
+    }
+}
+
 fn push_error(
     errors: &mut Vec<ValidationError>,
     path: impl Into<String>,
@@ -831,6 +1058,8 @@ mod tests {
             devices: Some(vec![]),
             storage: StorageCollection {
                 disks: Some(vec![]),
+                partitions: Some(vec![]),
+                volumes: Some(vec![]),
             },
         }
     }
@@ -856,6 +1085,8 @@ mod tests {
             devices: Some(vec![]),
             storage: StorageCollection {
                 disks: Some(vec![]),
+                partitions: Some(vec![]),
+                volumes: Some(vec![]),
             },
         }
     }
