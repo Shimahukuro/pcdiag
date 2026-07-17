@@ -76,6 +76,20 @@ impl Collection {
                 }
             }
         }
+        if let Some(devices) = &self.devices {
+            let mut instance_ids = HashSet::new();
+            for (index, device) in devices.iter().enumerate() {
+                if let Some(instance_id) = &device.device_instance_id
+                    && !instance_ids.insert(instance_id)
+                {
+                    push_error(
+                        &mut errors,
+                        format!("/devices/{index}/device_instance_id"),
+                        "must be unique within the device collection",
+                    );
+                }
+            }
+        }
         validate_available_not_greater_than_total(
             &mut errors,
             "/memory/commit",
@@ -124,7 +138,116 @@ impl Collection {
         } else if let Some(collector) = gpu_collectors.first() {
             validate_gpu_status(self, collector, &mut errors);
         }
+        let device_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::Devices)
+            .collect();
+        if device_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one device collector result",
+            );
+        } else if let Some(collector) = device_collectors.first() {
+            validate_device_status(self, collector, &mut errors);
+        }
         finish(errors)
+    }
+}
+
+fn validate_device_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collection_value = serde_json::to_value(collection).expect("collection must serialize");
+
+    match collector.status {
+        CollectorStatus::Success | CollectorStatus::Partial => {
+            let Some(devices) = &collection.devices else {
+                push_error(
+                    errors,
+                    "/devices",
+                    "successful or partial device collectors require a device array",
+                );
+                return;
+            };
+
+            for field in &collector.fields {
+                match collection_value.pointer(&field.path) {
+                    Some(Value::Null) => {}
+                    Some(_) => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status must refer to a null value",
+                    ),
+                    None => push_error(
+                        errors,
+                        &field.path,
+                        "field collection status refers to an unknown path",
+                    ),
+                }
+            }
+
+            for path in device_null_paths(devices) {
+                if !collector.fields.iter().any(|field| field.path == path) {
+                    push_error(
+                        errors,
+                        path,
+                        "null device value must have a field collection status",
+                    );
+                }
+            }
+
+            for (index, device) in devices.iter().enumerate() {
+                if device.device_state.present == Some(false) {
+                    for suffix in ["enabled", "problem_code"] {
+                        let path = format!("/devices/{index}/device_state/{suffix}");
+                        if collection_value.pointer(&path) == Some(&Value::Null)
+                            && let Some(field) =
+                                collector.fields.iter().find(|field| field.path == path)
+                            && field.status != crate::FieldCollectionStatus::NotApplicable
+                        {
+                            push_error(
+                                errors,
+                                path,
+                                "state unavailable because a device is absent must be not_applicable",
+                            );
+                        }
+                    }
+                }
+            }
+
+            if collector.status == CollectorStatus::Success
+                && collector
+                    .fields
+                    .iter()
+                    .any(|field| field.status != crate::FieldCollectionStatus::NotApplicable)
+            {
+                push_error(
+                    errors,
+                    "/collectors/devices/status",
+                    "success may only contain not_applicable field statuses",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if collection.devices.is_some() {
+                push_error(
+                    errors,
+                    "/devices",
+                    "skipped or failed device collectors require a null device collection",
+                );
+            }
+            if collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/devices/messages",
+                    "skipped or failed device collectors must include a reason",
+                );
+            }
+        }
     }
 }
 
@@ -211,6 +334,13 @@ fn gpu_null_paths(collection: &Collection) -> Vec<String> {
     let value = serde_json::to_value(gpus).expect("GPU collection must serialize");
     let mut paths = Vec::new();
     collect_null_paths(&value, "/gpus", &mut paths);
+    paths
+}
+
+fn device_null_paths(devices: &[crate::ConnectedDevice]) -> Vec<String> {
+    let value = serde_json::to_value(devices).expect("device collection must serialize");
+    let mut paths = Vec::new();
+    collect_null_paths(&value, "/devices", &mut paths);
     paths
 }
 

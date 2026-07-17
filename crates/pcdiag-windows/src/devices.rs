@@ -51,10 +51,13 @@ fn build_result(
                 collection: Some(collection),
                 status: CollectorResult {
                     name: CollectorName::Devices,
-                    status: if fields.is_empty() {
-                        CollectorStatus::Success
-                    } else {
+                    status: if fields
+                        .iter()
+                        .any(|field| field.status != FieldCollectionStatus::NotApplicable)
+                    {
                         CollectorStatus::Partial
+                    } else {
+                        CollectorStatus::Success
                     },
                     duration_ms,
                     messages: vec![],
@@ -113,16 +116,6 @@ fn map_device(
             "device_present_state_unavailable",
         ),
         (
-            "device_state/enabled",
-            snapshot.enabled.is_some(),
-            "device_enabled_state_unavailable",
-        ),
-        (
-            "device_state/problem_code",
-            snapshot.problem_code.is_some(),
-            "device_problem_code_unavailable",
-        ),
-        (
             "driver/version",
             snapshot.driver_version.is_some(),
             "device_driver_version_unavailable",
@@ -134,13 +127,43 @@ fn map_device(
         ),
     ] {
         if !value {
-            fields.push(FieldCollectionResult {
-                path: format!("{base}/{suffix}"),
-                status: FieldCollectionStatus::SourceNull,
-                code: code.into(),
-                native_code: None,
-            });
+            push_missing_field(
+                fields,
+                &base,
+                suffix,
+                FieldCollectionStatus::SourceNull,
+                code,
+            );
         }
+    }
+
+    let state_null_status = if snapshot.present == Some(false) {
+        FieldCollectionStatus::NotApplicable
+    } else {
+        FieldCollectionStatus::SourceNull
+    };
+    let state_null_code = if snapshot.present == Some(false) {
+        "device_not_present"
+    } else {
+        "device_state_unavailable"
+    };
+    if snapshot.enabled.is_none() {
+        push_missing_field(
+            fields,
+            &base,
+            "device_state/enabled",
+            state_null_status,
+            state_null_code,
+        );
+    }
+    if snapshot.problem_code.is_none() {
+        push_missing_field(
+            fields,
+            &base,
+            "device_state/problem_code",
+            state_null_status,
+            state_null_code,
+        );
     }
 
     ConnectedDevice {
@@ -159,6 +182,21 @@ fn map_device(
             date: snapshot.driver_date,
         },
     }
+}
+
+fn push_missing_field(
+    fields: &mut Vec<FieldCollectionResult>,
+    base: &str,
+    suffix: &str,
+    status: FieldCollectionStatus,
+    code: &str,
+) {
+    fields.push(FieldCollectionResult {
+        path: format!("{base}/{suffix}"),
+        status,
+        code: code.into(),
+        native_code: None,
+    });
 }
 
 fn elapsed_ms(started: Instant) -> u64 {
@@ -355,6 +393,26 @@ mod tests {
 
         assert_eq!(result.status.status, CollectorStatus::Partial);
         assert_eq!(result.status.fields[0].path, "/devices/0/driver/date");
+    }
+
+    #[test]
+    fn absent_device_state_is_not_a_collection_failure() {
+        let mut device = snapshot();
+        device.present = Some(false);
+        device.enabled = None;
+        device.problem_code = None;
+
+        let result = build_result(Ok(vec![device]), 2);
+
+        assert_eq!(result.status.status, CollectorStatus::Success);
+        assert_eq!(result.status.fields.len(), 2);
+        assert!(
+            result
+                .status
+                .fields
+                .iter()
+                .all(|field| field.status == FieldCollectionStatus::NotApplicable)
+        );
     }
 
     #[test]
