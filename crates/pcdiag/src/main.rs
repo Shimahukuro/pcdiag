@@ -2,10 +2,24 @@ mod bundle;
 mod diagnose;
 mod report;
 
-use std::{ffi::OsString, path::PathBuf, process::ExitCode};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 fn main() -> ExitCode {
     match parse_args(std::env::args_os().skip(1)) {
+        Ok(Command::DefaultPipeline { output }) => match run_default_pipeline(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
         Ok(Command::Collect { output }) => match bundle::collect_to_bundle(&output) {
             Ok(path) => {
                 println!("{}", path.display());
@@ -50,6 +64,7 @@ fn main() -> ExitCode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
+    DefaultPipeline { output: PathBuf },
     Collect { output: PathBuf },
     Diagnose { output: PathBuf },
     Report { output: PathBuf },
@@ -59,10 +74,9 @@ enum Command {
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
     let mut arguments = arguments.into_iter();
     let Some(command) = arguments.next() else {
-        return Err(
-            "引数なし実行はreportの実装後に有効になります。現在はcollectまたはdiagnoseを指定してください"
-                .into(),
-        );
+        return Ok(Command::DefaultPipeline {
+            output: PathBuf::from("."),
+        });
     };
     if command == "--help" || command == "-h" {
         if arguments.next().is_some() {
@@ -109,9 +123,23 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
 
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n注記:\n  引数なし実行は今後の実装で有効になります。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n引数なし実行:\n  現在の作業ディレクトリへ新規セッションを作成し、collect、diagnose、reportの順に実行します。",
         env!("CARGO_PKG_VERSION")
     );
+}
+
+fn run_default_pipeline(output_root: &Path) -> Result<PathBuf, String> {
+    eprintln!("pcdiag: 情報収集を開始します");
+    let session = bundle::collect_to_bundle(output_root)
+        .map_err(|error| format!("collectに失敗しました: {error}"))?;
+    eprintln!("pcdiag: 診断を開始します: {}", session.display());
+    diagnose::diagnose_bundle(&session)
+        .map_err(|error| format!("diagnoseに失敗しました: {error}"))?;
+    eprintln!("pcdiag: レポートを生成します: {}", session.display());
+    let report = report::generate_report(&session)
+        .map_err(|error| format!("reportに失敗しました: {error}"))?;
+    eprintln!("pcdiag: 完了しました");
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -129,9 +157,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_output_and_unimplemented_default_pipeline() {
+    fn rejects_missing_output_and_parses_default_pipeline() {
         assert!(parse_args(["collect".into()]).is_err());
-        assert!(parse_args(Vec::<OsString>::new()).is_err());
+        assert_eq!(
+            parse_args(Vec::<OsString>::new()).unwrap(),
+            Command::DefaultPipeline {
+                output: PathBuf::from(".")
+            }
+        );
     }
 
     #[test]

@@ -416,6 +416,13 @@ fn format_smart(smart: &DiskSmart) -> String {
                 "メディアエラー: {}",
                 option_display(smart.media_errors)
             ));
+            values.push(format!(
+                "温度: {}",
+                smart
+                    .temperature_celsius
+                    .map(|value| format!("{value} °C"))
+                    .unwrap_or_else(unknown)
+            ));
         }
         SmartProtocol::Unknown => {
             values.push(format!(
@@ -425,15 +432,11 @@ fn format_smart(smart: &DiskSmart) -> String {
                     .map(|value| if value { "あり" } else { "なし" }.into())
                     .unwrap_or_else(unknown)
             ));
+            if let Some(value) = smart.temperature_celsius {
+                values.push(format!("温度: {value} °C"));
+            }
         }
     }
-    values.push(format!(
-        "温度: {}",
-        smart
-            .temperature_celsius
-            .map(|value| format!("{value} °C"))
-            .unwrap_or_else(unknown)
-    ));
     if smart.protocol == SmartProtocol::Nvme {
         values.push(format!(
             "稼働時間: {}",
@@ -619,7 +622,7 @@ mod tests {
         };
         assert_eq!(
             format_smart(&smart),
-            "プロトコル: FailurePrediction / 障害予測: なし / 温度: 取得不能"
+            "プロトコル: FailurePrediction / 障害予測: なし"
         );
     }
 
