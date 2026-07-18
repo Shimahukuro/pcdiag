@@ -1407,7 +1407,7 @@ impl Diagnosis {
                     }
                     Evidence::Derived { source_paths, .. } => {
                         for source_path in source_paths {
-                            match memory_value(collection, source_path) {
+                            match collection_value(collection, source_path) {
                                 Some(Value::Null) | None => push_error(
                                     &mut errors,
                                     &evidence_path,
@@ -1491,7 +1491,7 @@ fn validate_memory_status(
     let null_paths: Vec<_> = MEMORY_PATHS
         .iter()
         .copied()
-        .filter(|path| memory_value(collection, path) == Some(Value::Null))
+        .filter(|path| collection_value(collection, path) == Some(Value::Null))
         .collect();
 
     match collector.status {
@@ -1523,7 +1523,7 @@ fn validate_memory_status(
             }
 
             for field in &collector.fields {
-                match memory_value(collection, &field.path) {
+                match collection_value(collection, &field.path) {
                     Some(Value::Null) => {}
                     Some(_) => push_error(
                         errors,
@@ -1564,7 +1564,7 @@ fn validate_collected_evidence(
     evidence_path: &str,
     errors: &mut Vec<ValidationError>,
 ) {
-    match memory_value(collection, path) {
+    match collection_value(collection, path) {
         Some(Value::Null) => push_error(
             errors,
             evidence_path,
@@ -1584,22 +1584,11 @@ fn validate_collected_evidence(
     }
 }
 
-fn memory_value(collection: &Collection, path: &str) -> Option<Value> {
-    let memory = &collection.memory;
-    match path {
-        "/memory/physical/total_bytes" => option_value(memory.physical.total_bytes),
-        "/memory/physical/available_bytes" => option_value(memory.physical.available_bytes),
-        "/memory/physical/load_percent" => option_value(memory.physical.load_percent),
-        "/memory/commit/limit_bytes" => option_value(memory.commit.limit_bytes),
-        "/memory/commit/available_bytes" => option_value(memory.commit.available_bytes),
-        "/memory/virtual/total_bytes" => option_value(memory.virtual_memory.total_bytes),
-        "/memory/virtual/available_bytes" => option_value(memory.virtual_memory.available_bytes),
-        _ => None,
-    }
-}
-
-fn option_value<T: serde::Serialize>(value: Option<T>) -> Option<Value> {
-    Some(serde_json::to_value(value).expect("supported memory value must serialize"))
+fn collection_value(collection: &Collection, path: &str) -> Option<Value> {
+    serde_json::to_value(collection)
+        .expect("collection must serialize")
+        .pointer(path)
+        .cloned()
 }
 
 fn validate_available_not_greater_than_total(
