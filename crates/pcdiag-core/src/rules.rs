@@ -15,7 +15,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     Diagnosis {
         rule_set: RuleSetInfo {
             name: "pcdiag_builtin".into(),
-            version: "0.2.0".into(),
+            version: "0.2.1".into(),
         },
         summary,
         evaluations,
@@ -83,7 +83,7 @@ fn evaluate_gpu_problem_codes(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
     let is_triggered = !triggered.is_empty();
     RuleEvaluation {
         rule_id: "gpu.device_problem".into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: status(is_triggered),
         severity: is_triggered.then_some(Severity::Error),
@@ -93,11 +93,15 @@ fn evaluate_gpu_problem_codes(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
             "GPUのデバイス問題コードに異常はありません"
         }
         .into(),
-        evidence: triggered
-            .into_iter()
-            .map(|(index, gpu)| Evidence::Collected {
-                path: format!("/gpus/{index}/device_state/problem_code"),
-                value: json!(gpu.device_state.problem_code),
+        evidence: gpus
+            .iter()
+            .filter_map(|(index, gpu)| {
+                gpu.device_state
+                    .problem_code
+                    .map(|problem_code| Evidence::Collected {
+                        path: format!("/gpus/{index}/device_state/problem_code"),
+                        value: json!(problem_code),
+                    })
             })
             .collect(),
         criterion: Some(Criterion {
@@ -105,7 +109,13 @@ fn evaluate_gpu_problem_codes(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
             threshold: json!(0),
             unit: None,
         }),
-        reason: None,
+        reason: (!missing.is_empty()).then(|| EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths: missing
+                .into_iter()
+                .map(|(index, _)| format!("/gpus/{index}/device_state/problem_code"))
+                .collect(),
+        }),
         recommendation: is_triggered.then(|| Recommendation {
             code: "review_gpu_device_problem".into(),
         }),
@@ -132,7 +142,7 @@ fn evaluate_gpu_enabled(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
     let is_triggered = !triggered.is_empty();
     RuleEvaluation {
         rule_id: "gpu.adapter_enabled".into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: status(is_triggered),
         severity: is_triggered.then_some(Severity::Warning),
@@ -142,11 +152,13 @@ fn evaluate_gpu_enabled(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
             "物理GPUは有効です"
         }
         .into(),
-        evidence: triggered
-            .into_iter()
-            .map(|(index, gpu)| Evidence::Collected {
-                path: format!("/gpus/{index}/device_state/enabled"),
-                value: json!(gpu.device_state.enabled),
+        evidence: gpus
+            .iter()
+            .filter_map(|(index, gpu)| {
+                gpu.device_state.enabled.map(|enabled| Evidence::Collected {
+                    path: format!("/gpus/{index}/device_state/enabled"),
+                    value: json!(enabled),
+                })
             })
             .collect(),
         criterion: Some(Criterion {
@@ -154,7 +166,13 @@ fn evaluate_gpu_enabled(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
             threshold: json!(false),
             unit: None,
         }),
-        reason: None,
+        reason: (!missing.is_empty()).then(|| EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths: missing
+                .into_iter()
+                .map(|(index, _)| format!("/gpus/{index}/device_state/enabled"))
+                .collect(),
+        }),
         recommendation: is_triggered.then(|| Recommendation {
             code: "enable_gpu_adapter".into(),
         }),
@@ -169,7 +187,7 @@ fn evaluate_gpu_driver_versions(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
     let is_triggered = !triggered.is_empty();
     RuleEvaluation {
         rule_id: "gpu.driver_version_available".into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: status(is_triggered),
         severity: is_triggered.then_some(Severity::Warning),
@@ -179,7 +197,18 @@ fn evaluate_gpu_driver_versions(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
             "物理GPUのドライバーバージョンを確認できました"
         }
         .into(),
-        evidence: vec![],
+        evidence: gpus
+            .iter()
+            .filter_map(|(index, gpu)| {
+                gpu.driver
+                    .version
+                    .as_ref()
+                    .map(|version| Evidence::Collected {
+                        path: format!("/gpus/{index}/driver/version"),
+                        value: json!(version),
+                    })
+            })
+            .collect(),
         criterion: Some(Criterion {
             operator: "unavailable_or_empty".into(),
             threshold: Value::Null,
@@ -209,7 +238,7 @@ fn status(triggered: bool) -> RuleEvaluationStatus {
 fn unavailable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotEvaluated,
         severity: None,
@@ -227,7 +256,7 @@ fn unavailable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
 fn inapplicable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotApplicable,
         severity: None,
@@ -250,7 +279,7 @@ fn missing_gpu_value_evaluation(
 ) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.0".into(),
+        rule_version: "1.1".into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotEvaluated,
         severity: None,
@@ -491,10 +520,28 @@ mod tests {
         let collection = gpu_collection();
         let diagnosis = diagnose_collection(&collection);
 
-        assert_eq!(diagnosis.rule_set.version, "0.2.0");
+        assert_eq!(diagnosis.rule_set.version, "0.2.1");
         assert!(diagnosis.evaluations[1..].iter().all(|evaluation| {
             evaluation.category == "gpu" && evaluation.status == RuleEvaluationStatus::Passed
         }));
+        assert_eq!(diagnosis.evaluations[1].evidence.len(), 1);
+        assert_eq!(diagnosis.evaluations[2].evidence.len(), 1);
+        assert_eq!(diagnosis.evaluations[3].evidence.len(), 1);
+        assert!(matches!(
+            &diagnosis.evaluations[1].evidence[0],
+            Evidence::Collected { path, value }
+                if path == "/gpus/0/device_state/problem_code" && value == &json!(0)
+        ));
+        assert!(matches!(
+            &diagnosis.evaluations[2].evidence[0],
+            Evidence::Collected { path, value }
+                if path == "/gpus/0/device_state/enabled" && value == &json!(true)
+        ));
+        assert!(matches!(
+            &diagnosis.evaluations[3].evidence[0],
+            Evidence::Collected { path, value }
+                if path == "/gpus/0/driver/version" && value == &json!("1.2.3.4")
+        ));
         diagnosis.validate_against(&collection).unwrap();
     }
 
