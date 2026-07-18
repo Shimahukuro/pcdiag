@@ -1,4 +1,7 @@
-use std::{collections::HashSet, fmt};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use serde_json::Value;
 
@@ -369,6 +372,7 @@ impl Collection {
         }
         if let Some(partitions) = &self.storage.partitions {
             let mut identities = HashSet::new();
+            let mut ranges: BTreeMap<u32, Vec<(usize, u64, u64)>> = BTreeMap::new();
             for (index, partition) in partitions.iter().enumerate() {
                 if !identities.insert((partition.disk_number, partition.partition_number)) {
                     push_error(
@@ -392,6 +396,29 @@ impl Collection {
                     partition.length_bytes,
                     self.storage.disks.as_deref(),
                 );
+                if !is_mbr_extended_partition(partition)
+                    && let Some(end) = partition.offset_bytes.checked_add(partition.length_bytes)
+                {
+                    ranges.entry(partition.disk_number).or_default().push((
+                        index,
+                        partition.offset_bytes,
+                        end,
+                    ));
+                }
+            }
+            for mut disk_ranges in ranges.into_values() {
+                disk_ranges.sort_by_key(|(_, offset, _)| *offset);
+                let mut furthest_end = 0;
+                for (index, offset, end) in disk_ranges {
+                    if offset < furthest_end {
+                        push_error(
+                            &mut errors,
+                            format!("/storage/partitions/{index}/offset_bytes"),
+                            "partition range must not overlap another partition on the same disk",
+                        );
+                    }
+                    furthest_end = furthest_end.max(end);
+                }
             }
         }
         if let Some(volumes) = &self.storage.volumes {
@@ -1638,6 +1665,16 @@ fn validate_storage_range(
     }
 }
 
+fn is_mbr_extended_partition(partition: &crate::DiskPartition) -> bool {
+    partition.style == crate::PartitionStyle::Mbr
+        && partition.type_id.as_deref().is_some_and(|type_id| {
+            matches!(
+                type_id.to_ascii_uppercase().as_str(),
+                "0X05" | "0X0F" | "0X85"
+            )
+        })
+}
+
 fn push_error(
     errors: &mut Vec<ValidationError>,
     path: impl Into<String>,
@@ -1665,10 +1702,10 @@ mod tests {
     use crate::{
         ClockCollection, CollectionMessage, CollectorStatus, CommitMemory, CpuCollection,
         CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, Criterion, DiagnosisSummary,
-        EvaluationCounts, FieldCollectionResult, FieldCollectionStatus, FindingCounts,
-        FirmwareCollection, FirmwareInterfaceType, MeasurementUnit, MemoryCollection,
-        PhysicalMemory, Recommendation, RuleEvaluation, RuleSetInfo, Severity, StorageCollection,
-        VirtualMemory, WindowsCollection,
+        DiskBusType, DiskPartition, EvaluationCounts, FieldCollectionResult, FieldCollectionStatus,
+        FindingCounts, FirmwareCollection, FirmwareInterfaceType, MeasurementUnit,
+        MemoryCollection, PartitionStyle, PhysicalDisk, PhysicalMemory, Recommendation,
+        RuleEvaluation, RuleSetInfo, Severity, StorageCollection, VirtualMemory, WindowsCollection,
     };
 
     #[test]
@@ -1682,6 +1719,74 @@ mod tests {
             serde_json::from_value::<Collection>(json).unwrap(),
             collection
         );
+    }
+
+    #[test]
+    fn rejects_overlapping_partitions_on_the_same_disk() {
+        let mut collection = complete_collection();
+        collection.storage.partitions = Some(vec![
+            DiskPartition {
+                disk_number: 0,
+                partition_number: 1,
+                offset_bytes: 1_048_576,
+                length_bytes: 10_000,
+                style: PartitionStyle::Gpt,
+                type_id: None,
+                bootable: None,
+            },
+            DiskPartition {
+                disk_number: 0,
+                partition_number: 2,
+                offset_bytes: 1_050_000,
+                length_bytes: 10_000,
+                style: PartitionStyle::Gpt,
+                type_id: None,
+                bootable: None,
+            },
+        ]);
+
+        let errors = collection.validate().unwrap_err();
+        assert!(errors.errors().iter().any(|error| {
+            error.path == "/storage/partitions/1/offset_bytes"
+                && error.message.contains("must not overlap")
+        }));
+    }
+
+    #[test]
+    fn allows_logical_partition_inside_mbr_extended_container() {
+        let mut collection = complete_collection();
+        collection.storage.disks = Some(vec![PhysicalDisk {
+            number: 0,
+            model: Some("Example Disk".into()),
+            manufacturer: None,
+            firmware_revision: None,
+            bus_type: Some(DiskBusType::Sata),
+            capacity_bytes: Some(1_000_000),
+            logical_sector_size_bytes: Some(512),
+            removable: Some(false),
+        }]);
+        collection.storage.partitions = Some(vec![
+            DiskPartition {
+                disk_number: 0,
+                partition_number: 1,
+                offset_bytes: 100_000,
+                length_bytes: 800_000,
+                style: PartitionStyle::Mbr,
+                type_id: Some("0x0F".into()),
+                bootable: Some(false),
+            },
+            DiskPartition {
+                disk_number: 0,
+                partition_number: 2,
+                offset_bytes: 200_000,
+                length_bytes: 100_000,
+                style: PartitionStyle::Mbr,
+                type_id: Some("0x07".into()),
+                bootable: Some(false),
+            },
+        ]);
+
+        collection.validate().unwrap();
     }
 
     #[test]
