@@ -83,8 +83,8 @@ impl ArtifactManifest {
         if self.manifest_schema_version != "1.0" {
             push(&mut errors, "/manifest_schema_version", "must be 1.0");
         }
-        if self.artifact_schema_version != "1.0" {
-            push(&mut errors, "/artifact_schema_version", "must be 1.0");
+        if self.artifact_schema_version != "2.0" {
+            push(&mut errors, "/artifact_schema_version", "must be 2.0");
         }
         for (path, value) in [
             ("/session_id", self.session_id.as_str()),
@@ -270,7 +270,7 @@ mod tests {
     fn manifest() -> ArtifactManifest {
         ArtifactManifest {
             manifest_schema_version: "1.0".into(),
-            artifact_schema_version: "1.0".into(),
+            artifact_schema_version: "2.0".into(),
             session_id: "a3f17c92-d604-4be8-9ea7-6ab7b92e41c5".into(),
             artifact_id: "831d1074-1145-4a66-bfa2-169903866adb".into(),
             artifact_type: ArtifactType::Collection,
@@ -304,6 +304,17 @@ mod tests {
     #[test]
     fn validates_collection_manifest() {
         manifest().validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_artifact_schema_version_1() {
+        let mut value = manifest();
+        value.artifact_schema_version = "1.0".into();
+
+        let errors = value.validate().unwrap_err();
+        assert!(errors.errors().iter().any(|error| {
+            error.path == "/artifact_schema_version" && error.message == "must be 2.0"
+        }));
     }
 
     #[test]

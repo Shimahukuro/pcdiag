@@ -11,7 +11,7 @@ use pcdiag_core::{
 use pcdiag_windows::collect_all;
 
 const MANIFEST_SCHEMA_VERSION: &str = "1.0";
-const ARTIFACT_SCHEMA_VERSION: &str = "1.0";
+const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
 
 pub fn collect_to_bundle(output_root: &Path) -> Result<PathBuf, BundleError> {
     let started = Instant::now();

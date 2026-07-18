@@ -86,7 +86,7 @@ fn write_diagnosis(
     };
     let manifest = ArtifactManifest {
         manifest_schema_version: "1.0".into(),
-        artifact_schema_version: "1.0".into(),
+        artifact_schema_version: "2.0".into(),
         session_id: collection.manifest.session_id,
         artifact_id: timing.artifact_id,
         artifact_type: ArtifactType::Diagnosis,
@@ -203,7 +203,7 @@ mod tests {
         LoadedCollectionArtifact {
             manifest: ArtifactManifest {
                 manifest_schema_version: "1.0".into(),
-                artifact_schema_version: "1.0".into(),
+                artifact_schema_version: "2.0".into(),
                 session_id: "a3f17c92-d604-4be8-9ea7-6ab7b92e41c5".into(),
                 artifact_id: "831d1074-1145-4a66-bfa2-169903866adb".into(),
                 artifact_type: ArtifactType::Collection,
