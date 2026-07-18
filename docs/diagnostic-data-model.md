@@ -422,7 +422,7 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 - 10%以上の場合: `passed`
 - 必要な収集値が`null`の場合: `not_evaluated`
 
-診断ルールセット名は`pcdiag_builtin`とする。メモリ規則のみの初期バージョンを`0.1.0`、GPU規則を追加したバージョンを`0.2.0`、正常時を含むGPU診断根拠を追加した現在のバージョンを`0.2.1`とする。診断成果物は収集成果物のマニフェストとファイル完全性を検証した後にだけ生成する。
+診断ルールセット名は`pcdiag_builtin`とする。メモリ規則のみの初期バージョンを`0.1.0`、GPU規則を追加したバージョンを`0.2.0`、正常時を含むGPU診断根拠を追加したバージョンを`0.2.1`、GPUデバイスインスタンスIDの重複検出を追加した現在のバージョンを`0.3.0`とする。診断成果物は収集成果物のマニフェストとファイル完全性を検証した後にだけ生成する。
 
 ### 評価不能
 
@@ -834,12 +834,13 @@ Windows実機で取得値を確認できたため、現在接続されている�
 | `gpu.device_problem` | `problem_code != 0` | `error` | `review_gpu_device_problem` |
 | `gpu.adapter_enabled` | `enabled == false` | `warning` | `enable_gpu_adapter` |
 | `gpu.driver_version_available` | ドライバーバージョンが`null`または空文字列 | `warning` | `review_gpu_driver_installation` |
+| `gpu.device_instance_id_unique` | 大文字・小文字を区別せず同一のIDが複数存在する | `warning` | `review_gpu_enumeration` |
 
 `gpus`自体を取得できなかった場合は`not_evaluated`、現在接続されている物理GPUがない場合は`not_applicable`とする。問題コードまたは有効状態だけを取得できなかった場合も、異常を示す別のGPUがない限り、その規則を`not_evaluated`とする。
 
 `passed`を含む評価済みのGPU規則では、対象となった各物理GPUの判定値を`evidence`へ記録する。これにより、問題がなかったという判定についても、使用した問題コード、有効状態、ドライバーバージョンを収集値まで追跡できるようにする。`null`は収集根拠として複写せず、取得できなかったパスを`reason.paths`へ記録する。
 
-同一のデバイスインスタンスIDの重複検出は、今後追加する診断候補として残す。
+デバイスインスタンスIDの一意性判定では、Windows上で大文字・小文字の差が同一デバイスを別物として扱う理由にならないため、比較時にASCII大文字へ正規化する。出力する診断根拠には収集時の文字列をそのまま保存する。IDを取得できない物理GPUがあり、既知のIDに重複がない場合は`not_evaluated`とする。
 
 ## 接続デバイスカテゴリ
 

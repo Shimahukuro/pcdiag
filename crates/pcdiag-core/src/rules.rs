@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use crate::{
@@ -15,7 +17,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     Diagnosis {
         rule_set: RuleSetInfo {
             name: "pcdiag_builtin".into(),
-            version: "0.2.1".into(),
+            version: "0.3.0".into(),
         },
         summary,
         evaluations,
@@ -27,15 +29,23 @@ fn evaluate_gpus(collection: &Collection) -> Vec<RuleEvaluation> {
         return vec![
             unavailable_gpu_evaluation(
                 "gpu.device_problem",
+                "1.1",
                 "GPUの問題コードを評価できませんでした",
             ),
             unavailable_gpu_evaluation(
                 "gpu.adapter_enabled",
+                "1.1",
                 "GPUの有効状態を評価できませんでした",
             ),
             unavailable_gpu_evaluation(
                 "gpu.driver_version_available",
+                "1.1",
                 "GPUドライバー情報を評価できませんでした",
+            ),
+            unavailable_gpu_evaluation(
+                "gpu.device_instance_id_unique",
+                "1.0",
+                "GPUのデバイスインスタンスIDを評価できませんでした",
             ),
         ];
     };
@@ -48,10 +58,24 @@ fn evaluate_gpus(collection: &Collection) -> Vec<RuleEvaluation> {
         .collect();
     if hardware.is_empty() {
         return vec![
-            inapplicable_gpu_evaluation("gpu.device_problem", "評価対象となる物理GPUがありません"),
-            inapplicable_gpu_evaluation("gpu.adapter_enabled", "評価対象となる物理GPUがありません"),
+            inapplicable_gpu_evaluation(
+                "gpu.device_problem",
+                "1.1",
+                "評価対象となる物理GPUがありません",
+            ),
+            inapplicable_gpu_evaluation(
+                "gpu.adapter_enabled",
+                "1.1",
+                "評価対象となる物理GPUがありません",
+            ),
             inapplicable_gpu_evaluation(
                 "gpu.driver_version_available",
+                "1.1",
+                "評価対象となる物理GPUがありません",
+            ),
+            inapplicable_gpu_evaluation(
+                "gpu.device_instance_id_unique",
+                "1.0",
                 "評価対象となる物理GPUがありません",
             ),
         ];
@@ -60,6 +84,7 @@ fn evaluate_gpus(collection: &Collection) -> Vec<RuleEvaluation> {
         evaluate_gpu_problem_codes(&hardware),
         evaluate_gpu_enabled(&hardware),
         evaluate_gpu_driver_versions(&hardware),
+        evaluate_gpu_instance_id_uniqueness(&hardware),
     ]
 }
 
@@ -75,6 +100,7 @@ fn evaluate_gpu_problem_codes(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
     if triggered.is_empty() && !missing.is_empty() {
         return missing_gpu_value_evaluation(
             "gpu.device_problem",
+            "1.1",
             "GPUの問題コードを評価できませんでした",
             &missing,
             "device_state/problem_code",
@@ -134,6 +160,7 @@ fn evaluate_gpu_enabled(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
     if triggered.is_empty() && !missing.is_empty() {
         return missing_gpu_value_evaluation(
             "gpu.adapter_enabled",
+            "1.1",
             "GPUの有効状態を評価できませんでした",
             &missing,
             "device_state/enabled",
@@ -175,6 +202,97 @@ fn evaluate_gpu_enabled(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
         }),
         recommendation: is_triggered.then(|| Recommendation {
             code: "enable_gpu_adapter".into(),
+        }),
+    }
+}
+
+fn evaluate_gpu_instance_id_uniqueness(gpus: &[(usize, &Gpu)]) -> RuleEvaluation {
+    let mut occurrences: BTreeMap<String, Vec<(usize, &str)>> = BTreeMap::new();
+    let mut missing_paths = Vec::new();
+    for (index, gpu) in gpus {
+        match gpu.device_instance_id.as_deref().map(str::trim) {
+            Some(instance_id) if !instance_id.is_empty() => occurrences
+                .entry(instance_id.to_ascii_uppercase())
+                .or_default()
+                .push((*index, instance_id)),
+            _ => missing_paths.push(format!("/gpus/{index}/device_instance_id")),
+        }
+    }
+    let duplicate_indices: Vec<_> = occurrences
+        .values()
+        .filter(|items| items.len() > 1)
+        .flat_map(|items| items.iter().copied())
+        .collect();
+    if duplicate_indices.is_empty() && !missing_paths.is_empty() {
+        return RuleEvaluation {
+            rule_id: "gpu.device_instance_id_unique".into(),
+            rule_version: "1.0".into(),
+            category: "gpu".into(),
+            status: RuleEvaluationStatus::NotEvaluated,
+            severity: None,
+            summary: "GPUのデバイスインスタンスIDの一意性を評価できませんでした".into(),
+            evidence: occurrences
+                .values()
+                .flatten()
+                .map(|(index, instance_id)| Evidence::Collected {
+                    path: format!("/gpus/{index}/device_instance_id"),
+                    value: json!(instance_id),
+                })
+                .collect(),
+            criterion: Some(Criterion {
+                operator: "unique".into(),
+                threshold: json!(true),
+                unit: None,
+            }),
+            reason: Some(EvaluationReason {
+                code: "required_collection_value_unavailable".into(),
+                paths: missing_paths,
+            }),
+            recommendation: None,
+        };
+    }
+    let triggered = !duplicate_indices.is_empty();
+    RuleEvaluation {
+        rule_id: "gpu.device_instance_id_unique".into(),
+        rule_version: "1.0".into(),
+        category: "gpu".into(),
+        status: status(triggered),
+        severity: triggered.then_some(Severity::Warning),
+        summary: if triggered {
+            "重複したGPUデバイスインスタンスIDがあります"
+        } else {
+            "GPUのデバイスインスタンスIDは一意です"
+        }
+        .into(),
+        evidence: if triggered {
+            duplicate_indices
+                .into_iter()
+                .map(|(index, instance_id)| Evidence::Collected {
+                    path: format!("/gpus/{index}/device_instance_id"),
+                    value: json!(instance_id),
+                })
+                .collect()
+        } else {
+            occurrences
+                .values()
+                .flatten()
+                .map(|(index, instance_id)| Evidence::Collected {
+                    path: format!("/gpus/{index}/device_instance_id"),
+                    value: json!(instance_id),
+                })
+                .collect()
+        },
+        criterion: Some(Criterion {
+            operator: "unique".into(),
+            threshold: json!(true),
+            unit: None,
+        }),
+        reason: (!missing_paths.is_empty()).then(|| EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths: missing_paths,
+        }),
+        recommendation: triggered.then(|| Recommendation {
+            code: "review_gpu_enumeration".into(),
         }),
     }
 }
@@ -235,10 +353,10 @@ fn status(triggered: bool) -> RuleEvaluationStatus {
     }
 }
 
-fn unavailable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
+fn unavailable_gpu_evaluation(rule_id: &str, rule_version: &str, summary: &str) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.1".into(),
+        rule_version: rule_version.into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotEvaluated,
         severity: None,
@@ -253,10 +371,10 @@ fn unavailable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
     }
 }
 
-fn inapplicable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
+fn inapplicable_gpu_evaluation(rule_id: &str, rule_version: &str, summary: &str) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.1".into(),
+        rule_version: rule_version.into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotApplicable,
         severity: None,
@@ -273,13 +391,14 @@ fn inapplicable_gpu_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
 
 fn missing_gpu_value_evaluation(
     rule_id: &str,
+    rule_version: &str,
     summary: &str,
     gpus: &[&(usize, &Gpu)],
     suffix: &str,
 ) -> RuleEvaluation {
     RuleEvaluation {
         rule_id: rule_id.into(),
-        rule_version: "1.1".into(),
+        rule_version: rule_version.into(),
         category: "gpu".into(),
         status: RuleEvaluationStatus::NotEvaluated,
         severity: None,
@@ -520,13 +639,14 @@ mod tests {
         let collection = gpu_collection();
         let diagnosis = diagnose_collection(&collection);
 
-        assert_eq!(diagnosis.rule_set.version, "0.2.1");
+        assert_eq!(diagnosis.rule_set.version, "0.3.0");
         assert!(diagnosis.evaluations[1..].iter().all(|evaluation| {
             evaluation.category == "gpu" && evaluation.status == RuleEvaluationStatus::Passed
         }));
         assert_eq!(diagnosis.evaluations[1].evidence.len(), 1);
         assert_eq!(diagnosis.evaluations[2].evidence.len(), 1);
         assert_eq!(diagnosis.evaluations[3].evidence.len(), 1);
+        assert_eq!(diagnosis.evaluations[4].evidence.len(), 1);
         assert!(matches!(
             &diagnosis.evaluations[1].evidence[0],
             Evidence::Collected { path, value }
@@ -541,6 +661,12 @@ mod tests {
             &diagnosis.evaluations[3].evidence[0],
             Evidence::Collected { path, value }
                 if path == "/gpus/0/driver/version" && value == &json!("1.2.3.4")
+        ));
+        assert!(matches!(
+            &diagnosis.evaluations[4].evidence[0],
+            Evidence::Collected { path, value }
+                if path == "/gpus/0/device_instance_id"
+                    && value == &json!("PCI\\VEN_1234&DEV_5678&SUBSYS_00000000&REV_01\\TEST")
         ));
         diagnosis.validate_against(&collection).unwrap();
     }
@@ -558,6 +684,28 @@ mod tests {
         assert_eq!(diagnosis.summary.findings.error, 1);
         assert_eq!(diagnosis.summary.findings.warning, 3);
         assert_eq!(diagnosis.summary.overall_severity, Some(Severity::Error));
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn reports_duplicate_gpu_instance_ids_case_insensitively() {
+        let mut collection = gpu_collection();
+        let mut duplicate = collection.gpus.as_ref().unwrap()[0].clone();
+        duplicate.device_instance_id = duplicate
+            .device_instance_id
+            .as_ref()
+            .map(|instance_id| instance_id.to_ascii_lowercase());
+        collection.gpus.as_mut().unwrap().push(duplicate);
+        let diagnosis = diagnose_collection(&collection);
+        let evaluation = &diagnosis.evaluations[4];
+
+        assert_eq!(evaluation.status, RuleEvaluationStatus::Triggered);
+        assert_eq!(evaluation.severity, Some(Severity::Warning));
+        assert_eq!(evaluation.evidence.len(), 2);
+        assert_eq!(
+            evaluation.recommendation.as_ref().unwrap().code,
+            "review_gpu_enumeration"
+        );
         diagnosis.validate_against(&collection).unwrap();
     }
 }
