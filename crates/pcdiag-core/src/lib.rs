@@ -1,11 +1,14 @@
 //! Shared data specifications for pcdiag artifacts.
 
+pub mod artifact;
 pub mod collection;
 pub mod diagnosis;
+pub mod hash;
 pub mod manifest;
 pub mod status;
 pub mod validation;
 
+pub use artifact::{ArtifactLoadError, LoadedCollectionArtifact, load_collection_artifact};
 pub use collection::{
     BootMode, ClockCollection, Collection, CommitMemory, ConnectedDevice, CpuCollection,
     CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, DeviceDriver, DeviceState,
@@ -20,6 +23,7 @@ pub use diagnosis::{
     FindingCounts, MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus,
     RuleSetInfo, Severity,
 };
+pub use hash::sha256_hex;
 pub use manifest::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
     ManifestValidationError, ManifestValidationErrors, ToolInfo, display_id, is_uuid_v4,
