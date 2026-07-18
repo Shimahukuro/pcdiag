@@ -41,7 +41,7 @@
       },
       "device_state": {
         "present": true,
-        "enabled": true,
+        "started": true,
         "problem_code": 0
       }
     }

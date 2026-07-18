@@ -15,7 +15,7 @@ fn connected_devices_round_trip() {
             "device_instance_id": "USB\\VID_1234&PID_5678\\TEST",
             "device_state": {
                 "present": true,
-                "enabled": true,
+                "started": true,
                 "problem_code": 0
             },
             "driver": {
@@ -38,7 +38,7 @@ fn missing_device_field_is_rejected_but_null_is_allowed() {
         "class": "USB",
         "class_guid": null,
         "device_instance_id": null,
-        "device_state": {"present": false, "enabled": null, "problem_code": null},
+        "device_state": {"present": false, "started": null, "problem_code": null},
         "driver": {"version": null, "date": null}
     }]);
     assert!(serde_json::from_value::<Collection>(value.clone()).is_ok());
@@ -62,7 +62,7 @@ fn absent_device_state_must_not_be_reported_as_source_null() {
 
     let errors = collection.validate_with_status(&status).unwrap_err();
     assert!(errors.errors().iter().any(|error| {
-        error.path == "/devices/0/device_state/enabled"
+        error.path == "/devices/0/device_state/started"
             && error.message.contains("must be not_applicable")
     }));
 }
@@ -85,7 +85,7 @@ fn absent_device_collection() -> Collection {
         "class": "USB",
         "class_guid": "{00000000-0000-0000-0000-000000000000}",
         "device_instance_id": "USB\\VID_1234&PID_5678\\OLD",
-        "device_state": {"present": false, "enabled": null, "problem_code": null},
+        "device_state": {"present": false, "started": null, "problem_code": null},
         "driver": {"version": "1.2.3.4", "date": "2026-07-17"}
     }]);
     serde_json::from_value(value).unwrap()
@@ -98,7 +98,7 @@ fn present_device() -> Value {
         "class": "USB",
         "class_guid": "{00000000-0000-0000-0000-000000000000}",
         "device_instance_id": "USB\\VID_1234&PID_5678\\TEST",
-        "device_state": {"present": true, "enabled": true, "problem_code": 0},
+        "device_state": {"present": true, "started": true, "problem_code": 0},
         "driver": {"version": "1.2.3.4", "date": "2026-07-17"}
     })
 }
@@ -120,7 +120,7 @@ fn device_status(collector_status: &str, field_status: &str) -> CollectionStatus
                 "messages": [],
                 "fields": [
                     {
-                        "path": "/devices/0/device_state/enabled",
+                        "path": "/devices/0/device_state/started",
                         "status": field_status,
                         "code": "device_not_present"
                     },

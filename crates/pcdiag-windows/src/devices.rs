@@ -19,7 +19,7 @@ struct DeviceSnapshot {
     class_guid: Option<String>,
     device_instance_id: Option<String>,
     present: Option<bool>,
-    enabled: Option<bool>,
+    started: Option<bool>,
     problem_code: Option<u32>,
     driver_version: Option<String>,
     driver_date: Option<String>,
@@ -147,11 +147,11 @@ fn map_device(
     } else {
         "device_state_unavailable"
     };
-    if snapshot.enabled.is_none() {
+    if snapshot.started.is_none() {
         push_missing_field(
             fields,
             &base,
-            "device_state/enabled",
+            "device_state/started",
             state_null_status,
             state_null_code,
         );
@@ -174,7 +174,7 @@ fn map_device(
         device_instance_id: snapshot.device_instance_id,
         device_state: DeviceState {
             present: snapshot.present,
-            enabled: snapshot.enabled,
+            started: snapshot.started,
             problem_code: snapshot.problem_code,
         },
         driver: DeviceDriver {
@@ -273,7 +273,7 @@ mod platform {
                 class_guid: Some(format_guid(data.ClassGuid.to_u128())),
                 device_instance_id: property_string(info.0, &data, &DEVPKEY_Device_InstanceId),
                 present: property_bool(info.0, &data, &DEVPKEY_Device_IsPresent),
-                enabled: status.map(|value| value & DN_STARTED.0 != 0),
+                started: status.map(|value| value & DN_STARTED.0 != 0),
                 problem_code: property_u32(info.0, &data, &DEVPKEY_Device_ProblemCode),
                 driver_version: property_string(info.0, &data, &DEVPKEY_Device_DriverVersion),
                 driver_date: property_date(info.0, &data, &DEVPKEY_Device_DriverDate),
@@ -399,7 +399,7 @@ mod tests {
     fn absent_device_state_is_not_a_collection_failure() {
         let mut device = snapshot();
         device.present = Some(false);
-        device.enabled = None;
+        device.started = None;
         device.problem_code = None;
 
         let result = build_result(Ok(vec![device]), 2);
@@ -431,7 +431,7 @@ mod tests {
             class_guid: Some("{00000000-0000-0000-0000-000000000000}".into()),
             device_instance_id: Some("USB\\VID_1234&PID_5678\\TEST".into()),
             present: Some(true),
-            enabled: Some(true),
+            started: Some(true),
             problem_code: Some(0),
             driver_version: Some("1.2.3.4".into()),
             driver_date: Some("2026-07-17".into()),

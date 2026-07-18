@@ -26,7 +26,7 @@ struct AdapterSnapshot {
     device_instance_id: Option<String>,
     driver_version: Option<String>,
     driver_date: Option<String>,
-    enabled: Option<bool>,
+    started: Option<bool>,
     problem_code: Option<u32>,
 }
 
@@ -197,13 +197,13 @@ fn map_adapter(
         missing_status(software),
     );
     record_missing(
-        &snapshot.enabled,
+        &snapshot.started,
         fields,
-        format!("{base}/device_state/enabled"),
+        format!("{base}/device_state/started"),
         if software {
-            "device_enabled_state_not_applicable"
+            "device_started_state_not_applicable"
         } else {
-            "device_enabled_state_unavailable"
+            "device_started_state_unavailable"
         },
         missing_status(software),
     );
@@ -241,7 +241,7 @@ fn map_adapter(
         },
         device_state: GpuDeviceState {
             present: Some(true),
-            enabled: snapshot.enabled,
+            started: snapshot.started,
             problem_code: snapshot.problem_code,
         },
     }
@@ -368,7 +368,7 @@ mod platform {
         device_instance_id: Option<String>,
         driver_version: Option<String>,
         driver_date: Option<String>,
-        enabled: Option<bool>,
+        started: Option<bool>,
         problem_code: Option<u32>,
     }
 
@@ -448,7 +448,7 @@ mod platform {
                 device_instance_id: details.and_then(|value| value.device_instance_id.clone()),
                 driver_version: details.and_then(|value| value.driver_version.clone()),
                 driver_date: details.and_then(|value| value.driver_date.clone()),
-                enabled: details.and_then(|value| value.enabled),
+                started: details.and_then(|value| value.started),
                 problem_code: details.and_then(|value| value.problem_code),
             });
         }
@@ -512,7 +512,7 @@ mod platform {
                 device_instance_id,
                 driver_version: property_string(info.0, &data, &DEVPKEY_Device_DriverVersion),
                 driver_date: property_date(info.0, &data, &DEVPKEY_Device_DriverDate),
-                enabled: status.map(|status| status & DN_STARTED.0 != 0),
+                started: status.map(|status| status & DN_STARTED.0 != 0),
                 problem_code: property_u32(info.0, &data, &DEVPKEY_Device_ProblemCode),
             });
         }
@@ -778,7 +778,7 @@ mod tests {
         adapter.device_instance_id = Some("PCI\\VEN_10DE&DEV_2684\\TEST".into());
         adapter.driver_version = Some("32.0.15.1234".into());
         adapter.driver_date = Some("2026-07-15".into());
-        adapter.enabled = Some(true);
+        adapter.started = Some(true);
         adapter.problem_code = Some(0);
 
         let result = build_result(success(vec![adapter]), 3);
@@ -850,7 +850,7 @@ mod tests {
             device_instance_id: None,
             driver_version: None,
             driver_date: None,
-            enabled: None,
+            started: None,
             problem_code: None,
         }
     }

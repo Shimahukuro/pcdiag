@@ -41,7 +41,7 @@ fn software_gpu_nulls_are_valid_when_marked_not_applicable() {
         "/gpus/0/device_instance_id",
         "/gpus/0/driver/version",
         "/gpus/0/driver/date",
-        "/gpus/0/device_state/enabled",
+        "/gpus/0/device_state/started",
         "/gpus/0/device_state/problem_code",
     ] {
         *value.pointer_mut(pointer).unwrap() = Value::Null;
@@ -51,7 +51,7 @@ fn software_gpu_nulls_are_valid_when_marked_not_applicable() {
         "/gpus/0/device_instance_id",
         "/gpus/0/driver/version",
         "/gpus/0/driver/date",
-        "/gpus/0/device_state/enabled",
+        "/gpus/0/device_state/started",
         "/gpus/0/device_state/problem_code",
     ]
     .into_iter()

@@ -1152,7 +1152,7 @@ fn validate_device_status(
 
             for (index, device) in devices.iter().enumerate() {
                 if device.device_state.present == Some(false) {
-                    for suffix in ["enabled", "problem_code"] {
+                    for suffix in ["started", "problem_code"] {
                         let path = format!("/devices/{index}/device_state/{suffix}");
                         if collection_value.pointer(&path) == Some(&Value::Null)
                             && let Some(field) =

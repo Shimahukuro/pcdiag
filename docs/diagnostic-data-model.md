@@ -422,7 +422,7 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 - 10%以上の場合: `passed`
 - 必要な収集値が`null`の場合: `not_evaluated`
 
-診断ルールセット名は`pcdiag_builtin`とする。メモリ規則のみの初期バージョンを`0.1.0`、GPU規則を追加したバージョンを`0.2.0`、正常時を含むGPU診断根拠を追加したバージョンを`0.2.1`、GPUデバイスインスタンスIDの重複検出を追加したバージョンを`0.3.0`、接続デバイス診断を追加した現在のバージョンを`0.4.0`とする。診断成果物は収集成果物のマニフェストとファイル完全性を検証した後にだけ生成する。
+診断ルールセット名は`pcdiag_builtin`とする。メモリ規則のみの初期バージョンを`0.1.0`、GPU規則を追加したバージョンを`0.2.0`、正常時を含むGPU診断根拠を追加したバージョンを`0.2.1`、GPUデバイスインスタンスIDの重複検出を追加したバージョンを`0.3.0`、接続デバイス診断を追加したバージョンを`0.4.0`、Windows実機結果に基づいて開始状態と有効状態を区別し、接続デバイス診断を問題コードへ限定した現在のバージョンを`0.5.0`とする。診断成果物は収集成果物のマニフェストとファイル完全性を検証した後にだけ生成する。
 
 ### 評価不能
 
@@ -748,7 +748,7 @@ BIOS公開日の元データが空または日付として不正な場合は、�
       },
       "device_state": {
         "present": true,
-        "enabled": true,
+        "started": true,
         "problem_code": 0
       }
     }
@@ -832,13 +832,13 @@ Windows実機で取得値を確認できたため、現在接続されている�
 | ルールID | 判定条件 | 検出時の重大度 | 推奨コード |
 |---|---|---|---|
 | `gpu.device_problem` | `problem_code != 0` | `error` | `review_gpu_device_problem` |
-| `gpu.adapter_enabled` | `enabled == false` | `warning` | `enable_gpu_adapter` |
+| `gpu.adapter_started` | `started == false` | `warning` | `review_gpu_start_state` |
 | `gpu.driver_version_available` | ドライバーバージョンが`null`または空文字列 | `warning` | `review_gpu_driver_installation` |
 | `gpu.device_instance_id_unique` | 大文字・小文字を区別せず同一のIDが複数存在する | `warning` | `review_gpu_enumeration` |
 
-`gpus`自体を取得できなかった場合は`not_evaluated`、現在接続されている物理GPUがない場合は`not_applicable`とする。問題コードまたは有効状態だけを取得できなかった場合も、異常を示す別のGPUがない限り、その規則を`not_evaluated`とする。
+`gpus`自体を取得できなかった場合は`not_evaluated`、現在接続されている物理GPUがない場合は`not_applicable`とする。問題コードまたは開始状態だけを取得できなかった場合も、異常を示す別のGPUがない限り、その規則を`not_evaluated`とする。
 
-`passed`を含む評価済みのGPU規則では、対象となった各物理GPUの判定値を`evidence`へ記録する。これにより、問題がなかったという判定についても、使用した問題コード、有効状態、ドライバーバージョンを収集値まで追跡できるようにする。`null`は収集根拠として複写せず、取得できなかったパスを`reason.paths`へ記録する。
+`passed`を含む評価済みのGPU規則では、対象となった各物理GPUの判定値を`evidence`へ記録する。これにより、問題がなかったという判定についても、使用した問題コード、開始状態、ドライバーバージョンを収集値まで追跡できるようにする。`null`は収集根拠として複写せず、取得できなかったパスを`reason.paths`へ記録する。
 
 デバイスインスタンスIDの一意性判定では、Windows上で大文字・小文字の差が同一デバイスを別物として扱う理由にならないため、比較時にASCII大文字へ正規化する。出力する診断根拠には収集時の文字列をそのまま保存する。IDを取得できない物理GPUがあり、既知のIDに重複がない場合は`not_evaluated`とする。
 
@@ -859,7 +859,7 @@ Windows実機で取得値を確認できたため、現在接続されている�
       "device_instance_id": "USB\\VID_1234&PID_5678\\...",
       "device_state": {
         "present": true,
-        "enabled": true,
+        "started": true,
         "problem_code": 0
       },
       "driver": {
@@ -883,7 +883,7 @@ Windows実機で取得値を確認できたため、現在接続されている�
 
 コレクター名は`devices`とする。列挙に成功して一部のプロパティだけ取得できない場合は`partial`、列挙自体に失敗した場合は`failed`とする。各`null`には`/devices/0/...`形式のJSON Pointerと取得不能理由を記録する。
 
-現在存在しないデバイスでは、開始状態と問題コードを現在値として評価できない。この場合、`device_state.enabled`と`device_state.problem_code`を`null`とし、取得状態を`not_applicable`、理由コードを`device_not_present`として記録する。これは収集失敗ではないため、ほかの取得不能値がなければデバイスコレクターを`success`にできる。
+`device_state.started`はWindowsの`DN_STARTED`フラグを表し、デバイスが開始されているかを示す。これはデバイスが管理上有効か無効かを直接表す値ではない。現在存在しないデバイスでは、開始状態と問題コードを現在値として評価できない。この場合、`device_state.started`と`device_state.problem_code`を`null`とし、取得状態を`not_applicable`、理由コードを`device_not_present`として記録する。これは収集失敗ではないため、ほかの取得不能値がなければデバイスコレクターを`success`にできる。
 
 デバイスインスタンスIDは、同一のデバイス列挙結果内で重複してはならない。すべての`null`値には対応するフィールド取得状態が必要であり、フィールド取得状態が指すJSON Pointerは実在する`null`値と一致しなければならない。
 
@@ -897,15 +897,16 @@ WindowsではSetupAPIの全デバイスクラスを列挙し、統一デバイ�
 
 | ルールID | 判定条件 | 検出時の重大度 | 推奨コード |
 |---|---|---|---|
-| `device.device_problem` | `problem_code != 0` | `error` | `review_device_problem` |
-| `device.enabled` | `enabled == false` | `warning` | `enable_device` |
-| `device.driver_version_available` | ドライバーバージョンが`null`または空文字列 | `warning` | `review_device_driver_installation` |
+| `device.device_problem` | `problem_code == 22` | `warning` | `enable_device` |
+| `device.device_problem` | 22以外の`problem_code != 0` | `error` | `review_device_problem` |
 
-`devices`自体を取得できなかった場合は3規則とも`not_evaluated`とする。現在接続中のデバイスがない場合は3規則とも`not_applicable`とする。
+`devices`自体を取得できなかった場合は`not_evaluated`とする。現在接続中のデバイスがない場合は`not_applicable`とする。
 
-問題コードまたは有効状態を取得できない現在接続中のデバイスがあり、取得済みの値に異常がない場合は、その規則を`not_evaluated`とする。別のデバイスで異常を検出できた場合は`triggered`とし、取得不能パスも`reason.paths`へ記録する。ドライバーバージョンの`null`または空文字列は、規則が検出する状態として扱う。
+問題コードを取得できない現在接続中のデバイスがあり、取得済みの値に異常がない場合は`not_evaluated`とする。別のデバイスで異常を検出できた場合は`triggered`とし、取得不能パスも`reason.paths`へ記録する。問題コード22だけが存在する場合は`warning`、22以外の問題コードが1件でも存在する場合は`error`とする。
 
-`passed`を含む評価済み規則では、現在接続中の各デバイスについて取得できた判定値を`evidence`へ記録する。`null`は収集根拠へ複写しない。過去接続デバイスの値は診断根拠へ含めない。
+`passed`を含む評価済み規則では、現在接続中の各デバイスについて取得できた問題コードを`evidence`へ記録する。`null`は収集根拠へ複写しない。過去接続デバイスの値は診断根拠へ含めない。
+
+`started == false`はシステムリソースなどでも正常に発生するため、単独では診断異常としない。ドライバーバージョンの`null`もデバイス種別によって正常に発生するため、初期診断規則には使用せず、取得状態として`status.json`とレポートで扱う。将来、デバイスクラスごとの正常状態を定義できた場合は、開始状態またはドライバー情報を使用する診断規則を再検討できる。
 
 ## 物理ディスクカテゴリ
 

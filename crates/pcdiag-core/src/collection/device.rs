@@ -23,7 +23,7 @@ pub struct DeviceState {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub present: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
-    pub enabled: Option<bool>,
+    pub started: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub problem_code: Option<u32>,
 }
