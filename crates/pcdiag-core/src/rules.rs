@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use crate::{
-    Collection, Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason,
-    Evidence, FindingCounts, Gpu, GpuAdapterType, MeasurementUnit, Recommendation, RuleEvaluation,
-    RuleEvaluationStatus, RuleSetInfo, Severity,
+    Collection, ConnectedDevice, Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts,
+    EvaluationReason, Evidence, FindingCounts, Gpu, GpuAdapterType, MeasurementUnit,
+    Recommendation, RuleEvaluation, RuleEvaluationStatus, RuleSetInfo, Severity,
 };
 
 const MEMORY_AVAILABLE_THRESHOLD_PERCENT: f64 = 10.0;
@@ -13,14 +13,299 @@ const MEMORY_AVAILABLE_THRESHOLD_PERCENT: f64 = 10.0;
 pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     let mut evaluations = vec![evaluate_memory_available_ratio(collection)];
     evaluations.extend(evaluate_gpus(collection));
+    evaluations.extend(evaluate_devices(collection));
     let summary = summarize(&evaluations);
     Diagnosis {
         rule_set: RuleSetInfo {
             name: "pcdiag_builtin".into(),
-            version: "0.3.0".into(),
+            version: "0.4.0".into(),
         },
         summary,
         evaluations,
+    }
+}
+
+fn evaluate_devices(collection: &Collection) -> Vec<RuleEvaluation> {
+    let Some(devices) = collection.devices.as_deref() else {
+        return vec![
+            unavailable_device_evaluation(
+                "device.device_problem",
+                "デバイスの問題コードを評価できませんでした",
+            ),
+            unavailable_device_evaluation(
+                "device.enabled",
+                "デバイスの有効状態を評価できませんでした",
+            ),
+            unavailable_device_evaluation(
+                "device.driver_version_available",
+                "デバイスのドライバー情報を評価できませんでした",
+            ),
+        ];
+    };
+    let present: Vec<(usize, &ConnectedDevice)> = devices
+        .iter()
+        .enumerate()
+        .filter(|(_, device)| device.device_state.present == Some(true))
+        .collect();
+    if present.is_empty() {
+        return vec![
+            inapplicable_device_evaluation(
+                "device.device_problem",
+                "現在接続中のデバイスがありません",
+            ),
+            inapplicable_device_evaluation("device.enabled", "現在接続中のデバイスがありません"),
+            inapplicable_device_evaluation(
+                "device.driver_version_available",
+                "現在接続中のデバイスがありません",
+            ),
+        ];
+    }
+    vec![
+        evaluate_device_problem_codes(&present),
+        evaluate_device_enabled(&present),
+        evaluate_device_driver_versions(&present),
+    ]
+}
+
+fn evaluate_device_problem_codes(devices: &[(usize, &ConnectedDevice)]) -> RuleEvaluation {
+    let triggered = devices.iter().any(|(_, device)| {
+        device
+            .device_state
+            .problem_code
+            .is_some_and(|code| code != 0)
+    });
+    let missing_paths: Vec<_> = devices
+        .iter()
+        .filter(|(_, device)| device.device_state.problem_code.is_none())
+        .map(|(index, _)| format!("/devices/{index}/device_state/problem_code"))
+        .collect();
+    let evidence: Vec<_> = devices
+        .iter()
+        .filter_map(|(index, device)| {
+            device
+                .device_state
+                .problem_code
+                .map(|problem_code| Evidence::Collected {
+                    path: format!("/devices/{index}/device_state/problem_code"),
+                    value: json!(problem_code),
+                })
+        })
+        .collect();
+    if !triggered && !missing_paths.is_empty() {
+        return incomplete_device_evaluation(
+            "device.device_problem",
+            "デバイスの問題コードを評価できませんでした",
+            evidence,
+            missing_paths,
+            Criterion {
+                operator: "not_equal".into(),
+                threshold: json!(0),
+                unit: None,
+            },
+        );
+    }
+    RuleEvaluation {
+        rule_id: "device.device_problem".into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: status(triggered),
+        severity: triggered.then_some(Severity::Error),
+        summary: if triggered {
+            "Windowsが接続デバイスの問題を報告しています"
+        } else {
+            "接続デバイスの問題コードに異常はありません"
+        }
+        .into(),
+        evidence,
+        criterion: Some(Criterion {
+            operator: "not_equal".into(),
+            threshold: json!(0),
+            unit: None,
+        }),
+        reason: (!missing_paths.is_empty()).then(|| EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths: missing_paths,
+        }),
+        recommendation: triggered.then(|| Recommendation {
+            code: "review_device_problem".into(),
+        }),
+    }
+}
+
+fn evaluate_device_enabled(devices: &[(usize, &ConnectedDevice)]) -> RuleEvaluation {
+    let triggered = devices
+        .iter()
+        .any(|(_, device)| device.device_state.enabled == Some(false));
+    let missing_paths: Vec<_> = devices
+        .iter()
+        .filter(|(_, device)| device.device_state.enabled.is_none())
+        .map(|(index, _)| format!("/devices/{index}/device_state/enabled"))
+        .collect();
+    let evidence: Vec<_> = devices
+        .iter()
+        .filter_map(|(index, device)| {
+            device
+                .device_state
+                .enabled
+                .map(|enabled| Evidence::Collected {
+                    path: format!("/devices/{index}/device_state/enabled"),
+                    value: json!(enabled),
+                })
+        })
+        .collect();
+    if !triggered && !missing_paths.is_empty() {
+        return incomplete_device_evaluation(
+            "device.enabled",
+            "デバイスの有効状態を評価できませんでした",
+            evidence,
+            missing_paths,
+            Criterion {
+                operator: "equal".into(),
+                threshold: json!(false),
+                unit: None,
+            },
+        );
+    }
+    RuleEvaluation {
+        rule_id: "device.enabled".into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: status(triggered),
+        severity: triggered.then_some(Severity::Warning),
+        summary: if triggered {
+            "無効化されている接続デバイスがあります"
+        } else {
+            "接続デバイスは有効です"
+        }
+        .into(),
+        evidence,
+        criterion: Some(Criterion {
+            operator: "equal".into(),
+            threshold: json!(false),
+            unit: None,
+        }),
+        reason: (!missing_paths.is_empty()).then(|| EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths: missing_paths,
+        }),
+        recommendation: triggered.then(|| Recommendation {
+            code: "enable_device".into(),
+        }),
+    }
+}
+
+fn evaluate_device_driver_versions(devices: &[(usize, &ConnectedDevice)]) -> RuleEvaluation {
+    let unavailable: Vec<_> = devices
+        .iter()
+        .filter(|(_, device)| {
+            device
+                .driver
+                .version
+                .as_deref()
+                .is_none_or(|version| version.trim().is_empty())
+        })
+        .collect();
+    let triggered = !unavailable.is_empty();
+    RuleEvaluation {
+        rule_id: "device.driver_version_available".into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: status(triggered),
+        severity: triggered.then_some(Severity::Warning),
+        summary: if triggered {
+            "ドライバーバージョンを確認できない接続デバイスがあります"
+        } else {
+            "接続デバイスのドライバーバージョンを確認できました"
+        }
+        .into(),
+        evidence: devices
+            .iter()
+            .filter_map(|(index, device)| {
+                device
+                    .driver
+                    .version
+                    .as_ref()
+                    .map(|version| Evidence::Collected {
+                        path: format!("/devices/{index}/driver/version"),
+                        value: json!(version),
+                    })
+            })
+            .collect(),
+        criterion: Some(Criterion {
+            operator: "unavailable_or_empty".into(),
+            threshold: Value::Null,
+            unit: None,
+        }),
+        reason: triggered.then(|| EvaluationReason {
+            code: "device_driver_version_unavailable".into(),
+            paths: unavailable
+                .into_iter()
+                .map(|(index, _)| format!("/devices/{index}/driver/version"))
+                .collect(),
+        }),
+        recommendation: triggered.then(|| Recommendation {
+            code: "review_device_driver_installation".into(),
+        }),
+    }
+}
+
+fn unavailable_device_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
+    RuleEvaluation {
+        rule_id: rule_id.into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: RuleEvaluationStatus::NotEvaluated,
+        severity: None,
+        summary: summary.into(),
+        evidence: vec![],
+        criterion: None,
+        reason: Some(EvaluationReason {
+            code: "device_collection_unavailable".into(),
+            paths: vec!["/devices".into()],
+        }),
+        recommendation: None,
+    }
+}
+
+fn inapplicable_device_evaluation(rule_id: &str, summary: &str) -> RuleEvaluation {
+    RuleEvaluation {
+        rule_id: rule_id.into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: RuleEvaluationStatus::NotApplicable,
+        severity: None,
+        summary: summary.into(),
+        evidence: vec![],
+        criterion: None,
+        reason: Some(EvaluationReason {
+            code: "no_present_device".into(),
+            paths: vec!["/devices".into()],
+        }),
+        recommendation: None,
+    }
+}
+
+fn incomplete_device_evaluation(
+    rule_id: &str,
+    summary: &str,
+    evidence: Vec<Evidence>,
+    paths: Vec<String>,
+    criterion: Criterion,
+) -> RuleEvaluation {
+    RuleEvaluation {
+        rule_id: rule_id.into(),
+        rule_version: "1.0".into(),
+        category: "device".into(),
+        status: RuleEvaluationStatus::NotEvaluated,
+        severity: None,
+        summary: summary.into(),
+        evidence,
+        criterion: Some(criterion),
+        reason: Some(EvaluationReason {
+            code: "required_collection_value_unavailable".into(),
+            paths,
+        }),
+        recommendation: None,
     }
 }
 
@@ -588,6 +873,47 @@ mod tests {
         .unwrap()
     }
 
+    fn device_collection() -> Collection {
+        let mut collection = gpu_collection();
+        collection.devices = Some(vec![
+            serde_json::from_value(json!({
+                "name": "Present Device",
+                "manufacturer": "Example Vendor",
+                "class": "USB",
+                "class_guid": "{00000000-0000-0000-0000-000000000001}",
+                "device_instance_id": "USB\\VID_1234&PID_5678\\PRESENT",
+                "device_state": {
+                    "present": true,
+                    "enabled": true,
+                    "problem_code": 0
+                },
+                "driver": {
+                    "version": "1.2.3.4",
+                    "date": "2026-07-18"
+                }
+            }))
+            .unwrap(),
+            serde_json::from_value(json!({
+                "name": "Past Device",
+                "manufacturer": "Example Vendor",
+                "class": "USB",
+                "class_guid": "{00000000-0000-0000-0000-000000000002}",
+                "device_instance_id": "USB\\VID_1234&PID_5678\\PAST",
+                "device_state": {
+                    "present": false,
+                    "enabled": null,
+                    "problem_code": null
+                },
+                "driver": {
+                    "version": null,
+                    "date": null
+                }
+            }))
+            .unwrap(),
+        ]);
+        collection
+    }
+
     #[test]
     fn triggers_warning_below_ten_percent() {
         let diagnosis = diagnose_collection(&collection());
@@ -639,8 +965,8 @@ mod tests {
         let collection = gpu_collection();
         let diagnosis = diagnose_collection(&collection);
 
-        assert_eq!(diagnosis.rule_set.version, "0.3.0");
-        assert!(diagnosis.evaluations[1..].iter().all(|evaluation| {
+        assert_eq!(diagnosis.rule_set.version, "0.4.0");
+        assert!(diagnosis.evaluations[1..5].iter().all(|evaluation| {
             evaluation.category == "gpu" && evaluation.status == RuleEvaluationStatus::Passed
         }));
         assert_eq!(diagnosis.evaluations[1].evidence.len(), 1);
@@ -668,6 +994,64 @@ mod tests {
                 if path == "/gpus/0/device_instance_id"
                     && value == &json!("PCI\\VEN_1234&DEV_5678&SUBSYS_00000000&REV_01\\TEST")
         ));
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn evaluates_only_present_connected_devices() {
+        let collection = device_collection();
+        let diagnosis = diagnose_collection(&collection);
+        let evaluations = &diagnosis.evaluations[5..8];
+
+        assert!(evaluations.iter().all(|evaluation| {
+            evaluation.category == "device"
+                && evaluation.status == RuleEvaluationStatus::Passed
+                && evaluation.evidence.len() == 1
+        }));
+        assert!(evaluations.iter().all(|evaluation| {
+            evaluation.evidence.iter().all(|evidence| match evidence {
+                Evidence::Collected { path, .. } => path.starts_with("/devices/0/"),
+                Evidence::Derived { .. } => false,
+            })
+        }));
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn reports_present_device_problem_disabled_state_and_missing_driver() {
+        let mut collection = device_collection();
+        let device = &mut collection.devices.as_mut().unwrap()[0];
+        device.device_state.problem_code = Some(22);
+        device.device_state.enabled = Some(false);
+        device.driver.version = None;
+        let diagnosis = diagnose_collection(&collection);
+        let evaluations = &diagnosis.evaluations[5..8];
+
+        assert!(
+            evaluations
+                .iter()
+                .all(|evaluation| evaluation.status == RuleEvaluationStatus::Triggered)
+        );
+        assert_eq!(evaluations[0].severity, Some(Severity::Error));
+        assert_eq!(evaluations[1].severity, Some(Severity::Warning));
+        assert_eq!(evaluations[2].severity, Some(Severity::Warning));
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn does_not_pass_when_present_device_problem_code_is_unavailable() {
+        let mut collection = device_collection();
+        collection.devices.as_mut().unwrap()[0]
+            .device_state
+            .problem_code = None;
+        let diagnosis = diagnose_collection(&collection);
+        let evaluation = &diagnosis.evaluations[5];
+
+        assert_eq!(evaluation.status, RuleEvaluationStatus::NotEvaluated);
+        assert_eq!(
+            evaluation.reason.as_ref().unwrap().paths,
+            vec!["/devices/0/device_state/problem_code"]
+        );
         diagnosis.validate_against(&collection).unwrap();
     }
 
