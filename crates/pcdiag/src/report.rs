@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     fs, io,
     path::{Path, PathBuf},
@@ -7,9 +8,9 @@ use std::{
 
 use pcdiag_core::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, Collection,
-    CollectionStatus, Diagnosis, Evidence, LoadedCollectionArtifact, LoadedDiagnosisArtifact,
-    RuleEvaluationStatus, Severity, ToolInfo, load_collection_artifact, load_diagnosis_artifact,
-    sha256_hex,
+    CollectionStatus, Diagnosis, DiskSmart, Evidence, LoadedCollectionArtifact,
+    LoadedDiagnosisArtifact, RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo,
+    load_collection_artifact, load_diagnosis_artifact, sha256_hex,
 };
 
 use crate::bundle::{self, pretty_json, write_new};
@@ -133,11 +134,16 @@ fn render_html(
         *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}@media print{body{background:#fff}main{max-width:none;padding:0}section{break-inside:avoid;border-color:#bbb}}\
         </style></head><body><main>",
     );
+    let collection_is_partial = collection.manifest.status == ArtifactStatus::Partial;
     let severity = result
         .summary
         .overall_severity
         .map(severity_text)
-        .unwrap_or("異常所見なし");
+        .unwrap_or(if collection_is_partial {
+            "診断範囲では異常所見なし"
+        } else {
+            "異常所見なし"
+        });
     write!(
         html,
         "<header><h1>pcdiag 診断レポート</h1><p class=\"muted\">セッション <code>{}</code> / 規則セット {} {}</p></header>",
@@ -160,6 +166,9 @@ fn render_html(
         .unwrap();
     }
     html.push_str("</div></section>");
+    if collection_is_partial {
+        html.push_str("<section class=\"finding warning\"><h2>情報収集に関する注意</h2><p>一部の情報を取得できなかったため、このレポートには未評価の情報が含まれる可能性があります。診断結果は、取得できた情報と現在の診断規則の範囲に基づきます。</p></section>");
+    }
     render_findings(&mut html, result);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
@@ -295,18 +304,7 @@ fn render_storage(html: &mut String, data: &Collection) {
                 .smart
                 .as_ref()
                 .and_then(|items| items.iter().find(|item| item.disk_number == disk.number));
-            let smart_text = smart
-                .map(|item| {
-                    format!(
-                        "{:?}, failure: {}, temp: {}",
-                        item.protocol,
-                        option_bool(item.predict_failure),
-                        item.temperature_celsius
-                            .map(|v| format!("{v} °C"))
-                            .unwrap_or_else(unknown)
-                    )
-                })
-                .unwrap_or_else(|| "未取得".into());
+            let smart_text = smart.map(format_smart).unwrap_or_else(|| "未取得".into());
             write!(
                 html,
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
@@ -352,12 +350,7 @@ fn render_devices(html: &mut String, data: &Collection) {
 fn render_collection_status(html: &mut String, status: &CollectionStatus) {
     html.push_str("<section><h2>情報収集状況</h2><table><tr><th>収集項目</th><th>状態</th><th>時間</th><th>補足</th></tr>");
     for collector in &status.collectors {
-        let details = collector
-            .messages
-            .iter()
-            .map(|message| message.code.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let details = collection_details(collector);
         write!(
             html,
             "<tr><td>{:?}</td><td>{:?}</td><td>{} ms</td><td>{}</td></tr>",
@@ -369,6 +362,98 @@ fn render_collection_status(html: &mut String, status: &CollectionStatus) {
         .unwrap();
     }
     html.push_str("</table></section>");
+}
+
+fn collection_details(collector: &pcdiag_core::CollectorResult) -> String {
+    let mut counts = BTreeMap::<(String, String), usize>::new();
+    for field in &collector.fields {
+        *counts
+            .entry((format!("{:?}", field.status), field.code.clone()))
+            .or_default() += 1;
+    }
+    let mut details = collector
+        .messages
+        .iter()
+        .map(|message| format!("message: {}", message.code))
+        .collect::<Vec<_>>();
+    details.extend(
+        counts
+            .into_iter()
+            .map(|((status, code), count)| format!("{status}: {code} ({count}件)")),
+    );
+    details.join(" / ")
+}
+
+fn format_smart(smart: &DiskSmart) -> String {
+    let mut values = vec![format!("プロトコル: {:?}", smart.protocol)];
+    match smart.protocol {
+        SmartProtocol::FailurePrediction => values.push(format!(
+            "障害予測: {}",
+            match smart.predict_failure {
+                Some(true) => "あり",
+                Some(false) => "なし",
+                None => "取得不能",
+            }
+        )),
+        SmartProtocol::Nvme => {
+            values.push(format!(
+                "重大警告: {}",
+                smart
+                    .critical_warning
+                    .map(|value| if value == 0 {
+                        "なし (0x00)".into()
+                    } else {
+                        format!("あり (0x{value:02x})")
+                    })
+                    .unwrap_or_else(unknown)
+            ));
+            values.push(format!(
+                "予備領域: {}",
+                format_percent(smart.available_spare_percent)
+            ));
+            values.push(format!("使用率: {}", format_percent(smart.percentage_used)));
+            values.push(format!(
+                "メディアエラー: {}",
+                option_display(smart.media_errors)
+            ));
+        }
+        SmartProtocol::Unknown => {
+            values.push(format!(
+                "障害予測: {}",
+                smart
+                    .predict_failure
+                    .map(|value| if value { "あり" } else { "なし" }.into())
+                    .unwrap_or_else(unknown)
+            ));
+        }
+    }
+    values.push(format!(
+        "温度: {}",
+        smart
+            .temperature_celsius
+            .map(|value| format!("{value} °C"))
+            .unwrap_or_else(unknown)
+    ));
+    if smart.protocol == SmartProtocol::Nvme {
+        values.push(format!(
+            "稼働時間: {}",
+            smart
+                .power_on_hours
+                .map(|value| format!("{value}時間"))
+                .unwrap_or_else(unknown)
+        ));
+        values.push(format!(
+            "安全でないシャットダウン: {}",
+            option_display(smart.unsafe_shutdowns)
+        ));
+    }
+    values.join(" / ")
+}
+
+fn format_percent(value: Option<u8>) -> String {
+    value
+        .map(|value| format!("{value}%"))
+        .unwrap_or_else(unknown)
 }
 
 fn row(html: &mut String, label: &str, value: &str) {
@@ -516,5 +601,46 @@ mod tests {
             escape("<script a='x'>&\""),
             "&lt;script a=&#39;x&#39;&gt;&amp;&quot;"
         );
+    }
+
+    #[test]
+    fn formats_failure_prediction_smart_without_ambiguous_labels() {
+        let smart = DiskSmart {
+            disk_number: 0,
+            protocol: SmartProtocol::FailurePrediction,
+            predict_failure: Some(false),
+            critical_warning: None,
+            temperature_celsius: None,
+            available_spare_percent: None,
+            percentage_used: None,
+            power_on_hours: None,
+            unsafe_shutdowns: None,
+            media_errors: None,
+        };
+        assert_eq!(
+            format_smart(&smart),
+            "プロトコル: FailurePrediction / 障害予測: なし / 温度: 取得不能"
+        );
+    }
+
+    #[test]
+    fn formats_nvme_smart_as_named_metrics() {
+        let smart = DiskSmart {
+            disk_number: 1,
+            protocol: SmartProtocol::Nvme,
+            predict_failure: None,
+            critical_warning: Some(0),
+            temperature_celsius: Some(30),
+            available_spare_percent: Some(100),
+            percentage_used: Some(30),
+            power_on_hours: Some(11_212),
+            unsafe_shutdowns: Some(414),
+            media_errors: Some(0),
+        };
+        let text = format_smart(&smart);
+        assert!(text.contains("重大警告: なし (0x00)"));
+        assert!(text.contains("予備領域: 100%"));
+        assert!(text.contains("使用率: 30%"));
+        assert!(text.contains("温度: 30 °C"));
     }
 }
