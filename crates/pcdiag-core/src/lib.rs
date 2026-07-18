@@ -5,6 +5,7 @@ pub mod collection;
 pub mod diagnosis;
 pub mod hash;
 pub mod manifest;
+pub mod rules;
 pub mod status;
 pub mod validation;
 
@@ -28,6 +29,7 @@ pub use manifest::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
     ManifestValidationError, ManifestValidationErrors, ToolInfo, display_id, is_uuid_v4,
 };
+pub use rules::diagnose_collection;
 pub use status::{
     CollectionMessage, CollectionStatus, CollectorName, CollectorResult, CollectorStatus,
     FieldCollectionResult, FieldCollectionStatus,

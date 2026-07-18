@@ -368,7 +368,7 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
 
 ### 診断結果
 
-以下の閾値は構造を説明する例であり、正式な診断閾値ではない。
+初期実装では`memory.available_ratio`を正式な組み込み診断ルールとして使用する。物理メモリ総容量に対する利用可能容量の割合が10%未満の場合、`warning`を発生させる。
 
 ```json
 {
@@ -410,6 +410,19 @@ Windowsが直接報告した`load_percent`は観測値として保存する。`p
   }
 }
 ```
+
+`memory.available_ratio`の判定規則:
+
+- ルールID: `memory.available_ratio`
+- ルールバージョン: `1.0`
+- 演算子: `less_than`
+- 閾値: `10.0 percent`
+- 検出時の重大度: `warning`
+- 推奨コード: `review_memory_consumption`
+- 10%以上の場合: `passed`
+- 必要な収集値が`null`の場合: `not_evaluated`
+
+診断ルールセット名は`pcdiag_builtin`、初期バージョンは`0.1.0`とする。診断成果物は収集成果物のマニフェストとファイル完全性を検証した後にだけ生成する。
 
 ### 評価不能
 

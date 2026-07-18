@@ -117,13 +117,13 @@ fn write_bundle(
     Ok(final_directory.to_owned())
 }
 
-fn pretty_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
+pub(crate) fn pretty_json<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, serde_json::Error> {
     let mut bytes = serde_json::to_vec_pretty(value)?;
     bytes.push(b'\n');
     Ok(bytes)
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
 
     let mut file = fs::OpenOptions::new()
@@ -134,7 +134,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn artifact_file(path: &str, bytes: &[u8]) -> ArtifactFile {
+pub(crate) fn artifact_file(path: &str, bytes: &[u8]) -> ArtifactFile {
     ArtifactFile {
         path: path.into(),
         media_type: "application/json".into(),
@@ -195,7 +195,7 @@ impl From<pcdiag_core::ManifestValidationErrors> for BundleError {
 }
 
 #[cfg(windows)]
-mod platform {
+pub(crate) mod platform {
     use windows_sys::Win32::{
         Foundation::SYSTEMTIME,
         Security::Cryptography::{BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom},
@@ -208,7 +208,7 @@ mod platform {
 
     use super::BundleError;
 
-    pub(super) fn uuid_v4() -> Result<String, BundleError> {
+    pub(crate) fn uuid_v4() -> Result<String, BundleError> {
         let mut bytes = [0u8; 16];
         // SAFETY: bytes is a valid writable buffer and the system-preferred RNG needs no handle.
         let status = unsafe {
@@ -247,7 +247,7 @@ mod platform {
         ))
     }
 
-    pub(super) fn utc_timestamp() -> Result<String, BundleError> {
+    pub(crate) fn utc_timestamp() -> Result<String, BundleError> {
         let mut time = SYSTEMTIME::default();
         // SAFETY: time points to writable SYSTEMTIME storage.
         unsafe { GetSystemTime(&mut time) };
@@ -263,7 +263,7 @@ mod platform {
         ))
     }
 
-    pub(super) fn local_directory_timestamp() -> Result<String, BundleError> {
+    pub(crate) fn local_directory_timestamp() -> Result<String, BundleError> {
         let mut time = SYSTEMTIME::default();
         // SAFETY: time points to writable SYSTEMTIME storage.
         unsafe { GetLocalTime(&mut time) };
@@ -273,7 +273,7 @@ mod platform {
         ))
     }
 
-    pub(super) fn utc_offset_minutes() -> Result<i32, BundleError> {
+    pub(crate) fn utc_offset_minutes() -> Result<i32, BundleError> {
         let mut information = TIME_ZONE_INFORMATION::default();
         // SAFETY: information points to writable TIME_ZONE_INFORMATION storage.
         let state = unsafe { GetTimeZoneInformation(&mut information) };
@@ -294,7 +294,7 @@ mod platform {
 }
 
 #[cfg(not(windows))]
-mod platform {
+pub(crate) mod platform {
     use super::BundleError;
 
     fn unsupported<T>() -> Result<T, BundleError> {
@@ -303,16 +303,16 @@ mod platform {
         ))
     }
 
-    pub(super) fn uuid_v4() -> Result<String, BundleError> {
+    pub(crate) fn uuid_v4() -> Result<String, BundleError> {
         unsupported()
     }
-    pub(super) fn utc_timestamp() -> Result<String, BundleError> {
+    pub(crate) fn utc_timestamp() -> Result<String, BundleError> {
         unsupported()
     }
-    pub(super) fn local_directory_timestamp() -> Result<String, BundleError> {
+    pub(crate) fn local_directory_timestamp() -> Result<String, BundleError> {
         unsupported()
     }
-    pub(super) fn utc_offset_minutes() -> Result<i32, BundleError> {
+    pub(crate) fn utc_offset_minutes() -> Result<i32, BundleError> {
         unsupported()
     }
 }

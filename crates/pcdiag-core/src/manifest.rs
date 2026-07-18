@@ -125,6 +125,15 @@ impl ArtifactManifest {
                 "collection artifact must not have inputs",
             );
         }
+        if self.artifact_type == ArtifactType::Diagnosis
+            && (self.inputs.len() != 1 || self.inputs[0].artifact_type != ArtifactType::Collection)
+        {
+            push(
+                &mut errors,
+                "/inputs",
+                "diagnosis artifact must have exactly one collection input",
+            );
+        }
         for (index, input) in self.inputs.iter().enumerate() {
             if !is_uuid_v4(&input.artifact_id) {
                 push(
@@ -175,6 +184,11 @@ impl ArtifactManifest {
                     push(&mut errors, "/files", format!("must contain {required}"));
                 }
             }
+        }
+        if self.artifact_type == ArtifactType::Diagnosis
+            && !self.files.iter().any(|file| file.path == "diagnosis.json")
+        {
+            push(&mut errors, "/files", "must contain diagnosis.json");
         }
 
         if errors.is_empty() {

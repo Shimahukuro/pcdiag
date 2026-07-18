@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::{
     Collection, CollectionStatus, CollectorName, CollectorResult, CollectorStatus, Diagnosis,
-    Evidence, RuleEvaluationStatus,
+    Evidence, RuleEvaluationStatus, Severity,
 };
 
 const MEMORY_PATHS: [&str; 7] = [
@@ -1321,9 +1321,42 @@ fn collect_null_paths(value: &Value, path: &str, paths: &mut Vec<String>) {
 impl Diagnosis {
     pub fn validate_against(&self, collection: &Collection) -> Result<(), ValidationErrors> {
         let mut errors = Vec::new();
+        if self.rule_set.name.is_empty() {
+            push_error(&mut errors, "/rule_set/name", "must not be empty");
+        }
+        if self.rule_set.version.is_empty() {
+            push_error(&mut errors, "/rule_set/version", "must not be empty");
+        }
+
+        let mut rule_ids = HashSet::new();
+        let mut passed = 0;
+        let mut triggered = 0;
+        let mut not_applicable = 0;
+        let mut not_evaluated = 0;
+        let mut failed = 0;
+        let mut critical = 0;
+        let mut error_findings = 0;
+        let mut warning = 0;
+        let mut information = 0;
+        let mut highest_severity = None;
 
         for (evaluation_index, evaluation) in self.evaluations.iter().enumerate() {
             let base = format!("/evaluations/{evaluation_index}");
+
+            if evaluation.rule_id.is_empty() || !rule_ids.insert(&evaluation.rule_id) {
+                push_error(
+                    &mut errors,
+                    format!("{base}/rule_id"),
+                    "must be non-empty and unique",
+                );
+            }
+            match evaluation.status {
+                RuleEvaluationStatus::Passed => passed += 1,
+                RuleEvaluationStatus::Triggered => triggered += 1,
+                RuleEvaluationStatus::NotApplicable => not_applicable += 1,
+                RuleEvaluationStatus::NotEvaluated => not_evaluated += 1,
+                RuleEvaluationStatus::Failed => failed += 1,
+            }
 
             if evaluation.status == RuleEvaluationStatus::Triggered && evaluation.severity.is_none()
             {
@@ -1332,6 +1365,22 @@ impl Diagnosis {
                     format!("{base}/severity"),
                     "triggered evaluations must have a severity",
                 );
+            }
+            if evaluation.status == RuleEvaluationStatus::Triggered
+                && let Some(severity) = evaluation.severity
+            {
+                match severity {
+                    Severity::Critical => critical += 1,
+                    Severity::Error => error_findings += 1,
+                    Severity::Warning => warning += 1,
+                    Severity::Information => information += 1,
+                }
+                if highest_severity
+                    .map(|current| severity_rank(severity) > severity_rank(current))
+                    .unwrap_or(true)
+                {
+                    highest_severity = Some(severity);
+                }
             }
 
             if evaluation.status == RuleEvaluationStatus::NotEvaluated
@@ -1374,7 +1423,63 @@ impl Diagnosis {
             }
         }
 
+        let counts = &self.summary.evaluations;
+        for (path, actual, expected) in [
+            ("/summary/evaluations/passed", counts.passed, passed),
+            (
+                "/summary/evaluations/triggered",
+                counts.triggered,
+                triggered,
+            ),
+            (
+                "/summary/evaluations/not_applicable",
+                counts.not_applicable,
+                not_applicable,
+            ),
+            (
+                "/summary/evaluations/not_evaluated",
+                counts.not_evaluated,
+                not_evaluated,
+            ),
+            ("/summary/evaluations/failed", counts.failed, failed),
+        ] {
+            if actual != expected {
+                push_error(&mut errors, path, "must match evaluations");
+            }
+        }
+        let findings = &self.summary.findings;
+        for (path, actual, expected) in [
+            ("/summary/findings/critical", findings.critical, critical),
+            ("/summary/findings/error", findings.error, error_findings),
+            ("/summary/findings/warning", findings.warning, warning),
+            (
+                "/summary/findings/information",
+                findings.information,
+                information,
+            ),
+        ] {
+            if actual != expected {
+                push_error(&mut errors, path, "must match triggered evaluations");
+            }
+        }
+        if self.summary.overall_severity != highest_severity {
+            push_error(
+                &mut errors,
+                "/summary/overall_severity",
+                "must be the highest triggered severity",
+            );
+        }
+
         finish(errors)
+    }
+}
+
+fn severity_rank(severity: Severity) -> u8 {
+    match severity {
+        Severity::Information => 1,
+        Severity::Warning => 2,
+        Severity::Error => 3,
+        Severity::Critical => 4,
     }
 }
 
