@@ -84,6 +84,20 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         }
         return Ok(Command::Help);
     }
+    if command == "--output" {
+        let Some(output) = arguments.next() else {
+            return Err("--outputの値が指定されていません".into());
+        };
+        if output.is_empty() {
+            return Err("--outputに空のパスは指定できません".into());
+        }
+        if arguments.next().is_some() {
+            return Err("余分な引数が指定されています".into());
+        }
+        return Ok(Command::DefaultPipeline {
+            output: PathBuf::from(output),
+        });
+    }
     if command != "collect" && command != "diagnose" && command != "report" {
         return Err(format!(
             "未対応のコマンドです: {}",
@@ -123,7 +137,7 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
 
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n引数なし実行:\n  現在の作業ディレクトリへ新規セッションを作成し、collect、diagnose、reportの順に実行します。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag\n  pcdiag --output <出力先ディレクトリ>\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -180,6 +194,17 @@ mod tests {
                 output: PathBuf::from("pcdiag-session")
             }
         );
+    }
+
+    #[test]
+    fn parses_default_pipeline_output() {
+        assert_eq!(
+            parse_args(["--output".into(), "D:\\pcdiag-results".into()]).unwrap(),
+            Command::DefaultPipeline {
+                output: PathBuf::from("D:\\pcdiag-results")
+            }
+        );
+        assert!(parse_args(["--output".into()]).is_err());
     }
 
     #[test]
