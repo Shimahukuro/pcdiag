@@ -2,6 +2,7 @@
 
 pub mod collection;
 pub mod diagnosis;
+pub mod manifest;
 pub mod status;
 pub mod validation;
 
@@ -18,6 +19,10 @@ pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
     FindingCounts, MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus,
     RuleSetInfo, Severity,
+};
+pub use manifest::{
+    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
+    ManifestValidationError, ManifestValidationErrors, ToolInfo, display_id, is_uuid_v4,
 };
 pub use status::{
     CollectionMessage, CollectionStatus, CollectorName, CollectorResult, CollectorStatus,

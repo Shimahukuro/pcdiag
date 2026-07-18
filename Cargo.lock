@@ -20,6 +20,9 @@ version = "0.1.0"
 dependencies = [
  "pcdiag-core",
  "pcdiag-windows",
+ "serde",
+ "serde_json",
+ "windows-sys",
 ]
 
 [[package]]

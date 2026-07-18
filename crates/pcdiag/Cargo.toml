@@ -9,3 +9,13 @@ publish.workspace = true
 [dependencies]
 pcdiag-core.workspace = true
 pcdiag-windows.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Security_Cryptography",
+    "Win32_System_SystemInformation",
+    "Win32_System_SystemServices",
+    "Win32_System_Time",
+] }
