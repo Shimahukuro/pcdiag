@@ -1,0 +1,520 @@
+use std::{
+    fmt::Write as _,
+    fs, io,
+    path::{Path, PathBuf},
+    time::Instant,
+};
+
+use pcdiag_core::{
+    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, Collection,
+    CollectionStatus, Diagnosis, Evidence, LoadedCollectionArtifact, LoadedDiagnosisArtifact,
+    RuleEvaluationStatus, Severity, ToolInfo, load_collection_artifact, load_diagnosis_artifact,
+    sha256_hex,
+};
+
+use crate::bundle::{self, pretty_json, write_new};
+
+pub fn generate_report(session_directory: &Path) -> Result<PathBuf, ReportError> {
+    let started = Instant::now();
+    let started_at = bundle::platform::utc_timestamp()?;
+    let observed_utc_offset_minutes = bundle::platform::utc_offset_minutes()?;
+    let collection = load_collection_artifact(&session_directory.join("collection"))?;
+    let diagnosis = load_diagnosis_artifact(&session_directory.join("diagnosis"), &collection)?;
+    let artifact_id = unique_artifact_id(&collection, &diagnosis)?;
+    let html = render_html(&collection, &diagnosis);
+    let completed_at = bundle::platform::utc_timestamp()?;
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    write_report(
+        session_directory,
+        collection,
+        diagnosis,
+        html.as_bytes(),
+        ReportTiming {
+            artifact_id,
+            started_at,
+            completed_at,
+            observed_utc_offset_minutes,
+            duration_ms,
+        },
+    )
+}
+
+fn unique_artifact_id(
+    collection: &LoadedCollectionArtifact,
+    diagnosis: &LoadedDiagnosisArtifact,
+) -> Result<String, ReportError> {
+    for _ in 0..16 {
+        let id = bundle::platform::uuid_v4()?;
+        if id != collection.manifest.session_id
+            && id != collection.manifest.artifact_id
+            && id != diagnosis.manifest.artifact_id
+        {
+            return Ok(id);
+        }
+    }
+    Err(ReportError::ArtifactIdCollision)
+}
+
+struct ReportTiming {
+    artifact_id: String,
+    started_at: String,
+    completed_at: String,
+    observed_utc_offset_minutes: i32,
+    duration_ms: u64,
+}
+
+fn write_report(
+    session_directory: &Path,
+    collection: LoadedCollectionArtifact,
+    diagnosis: LoadedDiagnosisArtifact,
+    html: &[u8],
+    timing: ReportTiming,
+) -> Result<PathBuf, ReportError> {
+    let final_directory = session_directory.join("report");
+    let incomplete_directory = session_directory.join("report.incomplete");
+    if final_directory.exists() {
+        return Err(ReportError::AlreadyExists(final_directory));
+    }
+    if incomplete_directory.exists() {
+        return Err(ReportError::IncompleteExists(incomplete_directory));
+    }
+    fs::create_dir(&incomplete_directory)?;
+    write_new(&incomplete_directory.join("report.html"), html)?;
+    let manifest = ArtifactManifest {
+        manifest_schema_version: "1.0".into(),
+        artifact_schema_version: "2.0".into(),
+        session_id: collection.manifest.session_id,
+        artifact_id: timing.artifact_id,
+        artifact_type: ArtifactType::Report,
+        status: ArtifactStatus::Complete,
+        started_at: timing.started_at,
+        completed_at: timing.completed_at,
+        observed_utc_offset_minutes: timing.observed_utc_offset_minutes,
+        duration_ms: timing.duration_ms,
+        tool: ToolInfo {
+            name: "pcdiag".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+        },
+        inputs: vec![
+            ArtifactInput {
+                artifact_id: collection.manifest.artifact_id,
+                artifact_type: ArtifactType::Collection,
+            },
+            ArtifactInput {
+                artifact_id: diagnosis.manifest.artifact_id,
+                artifact_type: ArtifactType::Diagnosis,
+            },
+        ],
+        files: vec![ArtifactFile {
+            path: "report.html".into(),
+            media_type: "text/html; charset=utf-8".into(),
+            size_bytes: u64::try_from(html.len()).unwrap_or(u64::MAX),
+            sha256: sha256_hex(html),
+        }],
+    };
+    manifest.validate()?;
+    write_new(
+        &incomplete_directory.join("manifest.json"),
+        &pretty_json(&manifest)?,
+    )?;
+    fs::rename(&incomplete_directory, &final_directory)?;
+    Ok(final_directory)
+}
+
+fn render_html(
+    collection: &LoadedCollectionArtifact,
+    diagnosis: &LoadedDiagnosisArtifact,
+) -> String {
+    let data = &collection.collection;
+    let result = &diagnosis.diagnosis;
+    let mut html = String::from(
+        "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>pcdiag 診断レポート</title><style>\
+        :root{color-scheme:light;--bg:#f4f6f8;--card:#fff;--ink:#17202a;--muted:#607080;--line:#dce2e7;--ok:#18794e;--info:#1f6feb;--warn:#9a6700;--error:#cf222e;--critical:#7a0019}\
+        *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}@media print{body{background:#fff}main{max-width:none;padding:0}section{break-inside:avoid;border-color:#bbb}}\
+        </style></head><body><main>",
+    );
+    let severity = result
+        .summary
+        .overall_severity
+        .map(severity_text)
+        .unwrap_or("異常所見なし");
+    write!(
+        html,
+        "<header><h1>pcdiag 診断レポート</h1><p class=\"muted\">セッション <code>{}</code> / 規則セット {} {}</p></header>",
+        escape(&collection.manifest.session_id),
+        escape(&result.rule_set.name),
+        escape(&result.rule_set.version)
+    )
+    .unwrap();
+    write!(html, "<section><h2>診断概要</h2><div class=\"grid\"><div class=\"metric\"><span>総合判定</span><b class=\"{}\">{severity}</b></div>", severity_class(result.summary.overall_severity)).unwrap();
+    for (label, count) in [
+        ("Critical", result.summary.findings.critical),
+        ("Error", result.summary.findings.error),
+        ("Warning", result.summary.findings.warning),
+        ("Information", result.summary.findings.information),
+    ] {
+        write!(
+            html,
+            "<div class=\"metric\"><span>{label}</span><b>{count}</b></div>"
+        )
+        .unwrap();
+    }
+    html.push_str("</div></section>");
+    render_findings(&mut html, result);
+    render_system(&mut html, data);
+    render_gpu(&mut html, data);
+    render_storage(&mut html, data);
+    render_devices(&mut html, data);
+    render_collection_status(&mut html, &collection.status);
+    write!(html, "<section><h2>成果物情報</h2><table><tr><th>収集</th><td><code>{}</code> ({:?})</td></tr><tr><th>診断</th><td><code>{}</code> ({:?})</td></tr><tr><th>レポート生成ツール</th><td>pcdiag {}</td></tr></table></section>", escape(&collection.manifest.artifact_id), collection.manifest.status, escape(&diagnosis.manifest.artifact_id), diagnosis.manifest.status, env!("CARGO_PKG_VERSION")).unwrap();
+    html.push_str("</main></body></html>\n");
+    html
+}
+
+fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
+    html.push_str("<section><h2>検出事項</h2>");
+    let mut found = false;
+    for evaluation in diagnosis
+        .evaluations
+        .iter()
+        .filter(|item| item.status == RuleEvaluationStatus::Triggered)
+    {
+        found = true;
+        let severity = evaluation.severity.unwrap_or(Severity::Information);
+        write!(html, "<article class=\"finding {}\"><strong>{}</strong> <span class=\"badge {}\">{}</span><p>{}</p>", severity_class(Some(severity)), escape(&evaluation.rule_id), severity_class(Some(severity)), severity_text(severity), escape(&evaluation.summary)).unwrap();
+        if !evaluation.evidence.is_empty() {
+            html.push_str("<ul>");
+            for evidence in &evaluation.evidence {
+                let (name, value) = match evidence {
+                    Evidence::Collected { path, value } => (path.as_str(), value),
+                    Evidence::Derived { name, value, .. } => (name.as_str(), value),
+                };
+                write!(
+                    html,
+                    "<li><code>{}</code>: <code>{}</code></li>",
+                    escape(name),
+                    escape(&value.to_string())
+                )
+                .unwrap();
+            }
+            html.push_str("</ul>");
+        }
+        if let Some(recommendation) = &evaluation.recommendation {
+            write!(
+                html,
+                "<p>推奨事項コード: <code>{}</code></p>",
+                escape(&recommendation.code)
+            )
+            .unwrap();
+        }
+        html.push_str("</article>");
+    }
+    if !found {
+        html.push_str("<p class=\"passed\">診断規則による異常所見はありません。</p>");
+    }
+    let counts = &diagnosis.summary.evaluations;
+    write!(html, "<p class=\"muted\">評価: passed {} / triggered {} / not applicable {} / not evaluated {} / failed {}</p></section>", counts.passed, counts.triggered, counts.not_applicable, counts.not_evaluated, counts.failed).unwrap();
+}
+
+fn render_system(html: &mut String, data: &Collection) {
+    let cpu_model = data
+        .cpu
+        .packages
+        .as_ref()
+        .and_then(|items| items.first())
+        .and_then(|item| item.model.as_deref());
+    html.push_str("<section><h2>システム概要</h2><table>");
+    row(
+        html,
+        "Windows",
+        &join_options(&[
+            data.windows.edition.as_deref(),
+            data.windows.version.as_deref(),
+        ]),
+    );
+    row(html, "ビルド", &option_display(data.windows.build_number));
+    row(html, "CPU", &text_or_unknown(cpu_model));
+    row(
+        html,
+        "物理コア / 論理プロセッサ",
+        &format!(
+            "{} / {}",
+            option_display(data.cpu.topology.physical_cores),
+            option_display(data.cpu.topology.logical_processors)
+        ),
+    );
+    row(
+        html,
+        "物理メモリ",
+        &format_bytes(data.memory.physical.total_bytes),
+    );
+    row(
+        html,
+        "メモリ使用率",
+        &data
+            .memory
+            .physical
+            .load_percent
+            .map(|v| format!("{v:.1}%"))
+            .unwrap_or_else(unknown),
+    );
+    row(
+        html,
+        "ファームウェア",
+        &join_options(&[
+            data.firmware.vendor.as_deref(),
+            data.firmware.version.as_deref(),
+        ]),
+    );
+    row(
+        html,
+        "Secure Boot",
+        &option_bool(data.firmware.secure_boot_enabled),
+    );
+    html.push_str("</table></section>");
+}
+
+fn render_gpu(html: &mut String, data: &Collection) {
+    html.push_str("<section><h2>GPU</h2><table><tr><th>名称</th><th>種別</th><th>ドライバー</th><th>状態</th></tr>");
+    if let Some(items) = &data.gpus {
+        for gpu in items {
+            write!(html, "<tr><td>{}</td><td>{:?}</td><td>{}</td><td>present: {} / started: {} / problem: {}</td></tr>", escape(&text_or_unknown(gpu.name.as_deref())), gpu.adapter_type, escape(&text_or_unknown(gpu.driver.version.as_deref())), option_bool(gpu.device_state.present), option_bool(gpu.device_state.started), option_display(gpu.device_state.problem_code)).unwrap();
+        }
+    } else {
+        html.push_str("<tr><td colspan=\"4\">取得不能</td></tr>");
+    }
+    html.push_str("</table></section>");
+}
+
+fn render_storage(html: &mut String, data: &Collection) {
+    html.push_str("<section><h2>ストレージ</h2><table><tr><th>ディスク</th><th>モデル</th><th>接続</th><th>容量</th><th>SMART</th></tr>");
+    if let Some(disks) = &data.storage.disks {
+        for disk in disks {
+            let smart = data
+                .storage
+                .smart
+                .as_ref()
+                .and_then(|items| items.iter().find(|item| item.disk_number == disk.number));
+            let smart_text = smart
+                .map(|item| {
+                    format!(
+                        "{:?}, failure: {}, temp: {}",
+                        item.protocol,
+                        option_bool(item.predict_failure),
+                        item.temperature_celsius
+                            .map(|v| format!("{v} °C"))
+                            .unwrap_or_else(unknown)
+                    )
+                })
+                .unwrap_or_else(|| "未取得".into());
+            write!(
+                html,
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                disk.number,
+                escape(&text_or_unknown(disk.model.as_deref())),
+                disk.bus_type
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_else(unknown),
+                format_bytes(disk.capacity_bytes),
+                escape(&smart_text)
+            )
+            .unwrap();
+        }
+    } else {
+        html.push_str("<tr><td colspan=\"5\">取得不能</td></tr>");
+    }
+    html.push_str("</table></section>");
+}
+
+fn render_devices(html: &mut String, data: &Collection) {
+    let Some(devices) = &data.devices else {
+        html.push_str("<section><h2>接続デバイス</h2><p>取得不能</p></section>");
+        return;
+    };
+    let present = devices
+        .iter()
+        .filter(|item| item.device_state.present == Some(true))
+        .count();
+    let past = devices
+        .iter()
+        .filter(|item| item.device_state.present == Some(false))
+        .count();
+    let problems = devices
+        .iter()
+        .filter(|item| {
+            item.device_state.present == Some(true)
+                && item.device_state.problem_code.unwrap_or(0) != 0
+        })
+        .count();
+    write!(html, "<section><h2>接続デバイス</h2><div class=\"grid\"><div class=\"metric\"><span>現在接続</span><b>{present}</b></div><div class=\"metric\"><span>過去の接続記録</span><b>{past}</b></div><div class=\"metric\"><span>問題コードあり</span><b>{problems}</b></div></div></section>").unwrap();
+}
+
+fn render_collection_status(html: &mut String, status: &CollectionStatus) {
+    html.push_str("<section><h2>情報収集状況</h2><table><tr><th>収集項目</th><th>状態</th><th>時間</th><th>補足</th></tr>");
+    for collector in &status.collectors {
+        let details = collector
+            .messages
+            .iter()
+            .map(|message| message.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        write!(
+            html,
+            "<tr><td>{:?}</td><td>{:?}</td><td>{} ms</td><td>{}</td></tr>",
+            collector.name,
+            collector.status,
+            collector.duration_ms,
+            escape(&details)
+        )
+        .unwrap();
+    }
+    html.push_str("</table></section>");
+}
+
+fn row(html: &mut String, label: &str, value: &str) {
+    write!(
+        html,
+        "<tr><th>{}</th><td>{}</td></tr>",
+        escape(label),
+        escape(value)
+    )
+    .unwrap();
+}
+
+fn escape(value: &str) -> String {
+    value.chars().fold(String::new(), |mut output, character| {
+        output.push_str(match character {
+            '&' => "&amp;",
+            '<' => "&lt;",
+            '>' => "&gt;",
+            '\"' => "&quot;",
+            '\'' => "&#39;",
+            _ => {
+                output.push(character);
+                return output;
+            }
+        });
+        output
+    })
+}
+
+fn severity_text(value: Severity) -> &'static str {
+    match value {
+        Severity::Critical => "重大",
+        Severity::Error => "エラー",
+        Severity::Warning => "警告",
+        Severity::Information => "情報",
+    }
+}
+fn severity_class(value: Option<Severity>) -> &'static str {
+    match value {
+        Some(Severity::Critical) => "critical",
+        Some(Severity::Error) => "error",
+        Some(Severity::Warning) => "warning",
+        Some(Severity::Information) => "information",
+        None => "passed",
+    }
+}
+fn unknown() -> String {
+    "取得不能".into()
+}
+fn text_or_unknown(value: Option<&str>) -> String {
+    value.map(str::to_owned).unwrap_or_else(unknown)
+}
+fn option_display<T: std::fmt::Display>(value: Option<T>) -> String {
+    value.map(|v| v.to_string()).unwrap_or_else(unknown)
+}
+fn option_bool(value: Option<bool>) -> String {
+    value
+        .map(|v| if v { "はい" } else { "いいえ" }.into())
+        .unwrap_or_else(unknown)
+}
+fn join_options(values: &[Option<&str>]) -> String {
+    let value = values
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if value.is_empty() { unknown() } else { value }
+}
+fn format_bytes(value: Option<u64>) -> String {
+    value
+        .map(|bytes| format!("{:.2} GiB ({bytes} bytes)", bytes as f64 / 1_073_741_824.0))
+        .unwrap_or_else(unknown)
+}
+
+#[derive(Debug)]
+pub enum ReportError {
+    Io(io::Error),
+    Json(serde_json::Error),
+    Bundle(bundle::BundleError),
+    Artifact(pcdiag_core::ArtifactLoadError),
+    Manifest(pcdiag_core::ManifestValidationErrors),
+    AlreadyExists(PathBuf),
+    IncompleteExists(PathBuf),
+    ArtifactIdCollision,
+}
+
+impl std::fmt::Display for ReportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "ファイル操作に失敗しました: {e}"),
+            Self::Json(e) => write!(f, "JSON生成に失敗しました: {e}"),
+            Self::Bundle(e) => write!(f, "実行環境情報を取得できませんでした: {e}"),
+            Self::Artifact(e) => write!(f, "入力成果物が不正です: {e}"),
+            Self::Manifest(e) => write!(f, "レポートマニフェストが不正です: {e}"),
+            Self::AlreadyExists(p) => write!(
+                f,
+                "レポート成果物は既に存在します。上書きしません: {}",
+                p.display()
+            ),
+            Self::IncompleteExists(p) => write!(
+                f,
+                "未完了のレポートディレクトリが存在します: {}",
+                p.display()
+            ),
+            Self::ArtifactIdCollision => {
+                f.write_str("一意なレポート成果物IDを生成できませんでした")
+            }
+        }
+    }
+}
+impl std::error::Error for ReportError {}
+impl From<io::Error> for ReportError {
+    fn from(v: io::Error) -> Self {
+        Self::Io(v)
+    }
+}
+impl From<serde_json::Error> for ReportError {
+    fn from(v: serde_json::Error) -> Self {
+        Self::Json(v)
+    }
+}
+impl From<bundle::BundleError> for ReportError {
+    fn from(v: bundle::BundleError) -> Self {
+        Self::Bundle(v)
+    }
+}
+impl From<pcdiag_core::ArtifactLoadError> for ReportError {
+    fn from(v: pcdiag_core::ArtifactLoadError) -> Self {
+        Self::Artifact(v)
+    }
+}
+impl From<pcdiag_core::ManifestValidationErrors> for ReportError {
+    fn from(v: pcdiag_core::ManifestValidationErrors) -> Self {
+        Self::Manifest(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn escapes_html_special_characters() {
+        assert_eq!(
+            escape("<script a='x'>&\""),
+            "&lt;script a=&#39;x&#39;&gt;&amp;&quot;"
+        );
+    }
+}

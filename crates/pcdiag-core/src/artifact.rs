@@ -1,12 +1,18 @@
 use std::{collections::HashMap, fmt, fs, path::Path};
 
-use crate::{ArtifactManifest, ArtifactType, Collection, CollectionStatus, sha256_hex};
+use crate::{ArtifactManifest, ArtifactType, Collection, CollectionStatus, Diagnosis, sha256_hex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedCollectionArtifact {
     pub manifest: ArtifactManifest,
     pub collection: Collection,
     pub status: CollectionStatus,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoadedDiagnosisArtifact {
+    pub manifest: ArtifactManifest,
+    pub diagnosis: Diagnosis,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,47 +32,7 @@ impl std::error::Error for ArtifactLoadError {}
 pub fn load_collection_artifact(
     artifact_directory: &Path,
 ) -> Result<LoadedCollectionArtifact, ArtifactLoadError> {
-    let manifest_path = artifact_directory.join("manifest.json");
-    let manifest_bytes = read(&manifest_path)?;
-    let manifest: ArtifactManifest = parse_json(&manifest_path, &manifest_bytes)?;
-    manifest.validate().map_err(|error| ArtifactLoadError {
-        path: display(&manifest_path),
-        message: error.to_string(),
-    })?;
-    if manifest.artifact_type != ArtifactType::Collection {
-        return Err(ArtifactLoadError {
-            path: display(&manifest_path),
-            message: "artifact_type must be collection".into(),
-        });
-    }
-
-    reject_unlisted_files(artifact_directory, &manifest)?;
-    let mut verified = HashMap::new();
-    for declared in &manifest.files {
-        let path = artifact_directory.join(&declared.path);
-        let bytes = read(&path)?;
-        let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-        if actual_size != declared.size_bytes {
-            return Err(ArtifactLoadError {
-                path: display(&path),
-                message: format!(
-                    "size mismatch: manifest={}, actual={actual_size}",
-                    declared.size_bytes
-                ),
-            });
-        }
-        let actual_hash = sha256_hex(&bytes);
-        if actual_hash != declared.sha256 {
-            return Err(ArtifactLoadError {
-                path: display(&path),
-                message: format!(
-                    "SHA-256 mismatch: manifest={}, actual={actual_hash}",
-                    declared.sha256
-                ),
-            });
-        }
-        verified.insert(declared.path.as_str(), bytes);
-    }
+    let (manifest, verified) = load_verified_files(artifact_directory, ArtifactType::Collection)?;
 
     let collection_path = artifact_directory.join("collection.json");
     let status_path = artifact_directory.join("status.json");
@@ -94,6 +60,94 @@ pub fn load_collection_artifact(
         collection,
         status,
     })
+}
+
+pub fn load_diagnosis_artifact(
+    artifact_directory: &Path,
+    collection: &LoadedCollectionArtifact,
+) -> Result<LoadedDiagnosisArtifact, ArtifactLoadError> {
+    let (manifest, verified) = load_verified_files(artifact_directory, ArtifactType::Diagnosis)?;
+    if manifest.session_id != collection.manifest.session_id {
+        return Err(ArtifactLoadError {
+            path: display(&artifact_directory.join("manifest.json")),
+            message: "session_id does not match collection artifact".into(),
+        });
+    }
+    let input = manifest
+        .inputs
+        .iter()
+        .find(|input| input.artifact_type == ArtifactType::Collection)
+        .expect("validated diagnosis manifest contains collection input");
+    if input.artifact_id != collection.manifest.artifact_id {
+        return Err(ArtifactLoadError {
+            path: display(&artifact_directory.join("manifest.json")),
+            message: "collection input artifact_id does not match collection artifact".into(),
+        });
+    }
+    let diagnosis_path = artifact_directory.join("diagnosis.json");
+    let diagnosis: Diagnosis = parse_json(
+        &diagnosis_path,
+        verified
+            .get("diagnosis.json")
+            .expect("validated diagnosis manifest contains diagnosis.json"),
+    )?;
+    diagnosis
+        .validate_against(&collection.collection)
+        .map_err(|error| ArtifactLoadError {
+            path: display(&diagnosis_path),
+            message: format!("diagnosis/collection validation failed: {error}"),
+        })?;
+    Ok(LoadedDiagnosisArtifact {
+        manifest,
+        diagnosis,
+    })
+}
+
+fn load_verified_files(
+    artifact_directory: &Path,
+    expected_type: ArtifactType,
+) -> Result<(ArtifactManifest, HashMap<String, Vec<u8>>), ArtifactLoadError> {
+    let manifest_path = artifact_directory.join("manifest.json");
+    let manifest_bytes = read(&manifest_path)?;
+    let manifest: ArtifactManifest = parse_json(&manifest_path, &manifest_bytes)?;
+    manifest.validate().map_err(|error| ArtifactLoadError {
+        path: display(&manifest_path),
+        message: error.to_string(),
+    })?;
+    if manifest.artifact_type != expected_type {
+        return Err(ArtifactLoadError {
+            path: display(&manifest_path),
+            message: format!("artifact_type must be {expected_type:?}").to_lowercase(),
+        });
+    }
+    reject_unlisted_files(artifact_directory, &manifest)?;
+    let mut verified = HashMap::new();
+    for declared in &manifest.files {
+        let path = artifact_directory.join(&declared.path);
+        let bytes = read(&path)?;
+        let actual_size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        if actual_size != declared.size_bytes {
+            return Err(ArtifactLoadError {
+                path: display(&path),
+                message: format!(
+                    "size mismatch: manifest={}, actual={actual_size}",
+                    declared.size_bytes
+                ),
+            });
+        }
+        let actual_hash = sha256_hex(&bytes);
+        if actual_hash != declared.sha256 {
+            return Err(ArtifactLoadError {
+                path: display(&path),
+                message: format!(
+                    "SHA-256 mismatch: manifest={}, actual={actual_hash}",
+                    declared.sha256
+                ),
+            });
+        }
+        verified.insert(declared.path.clone(), bytes);
+    }
+    Ok((manifest, verified))
 }
 
 fn reject_unlisted_files(

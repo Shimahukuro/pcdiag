@@ -1,5 +1,6 @@
 mod bundle;
 mod diagnose;
+mod report;
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
@@ -25,6 +26,16 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Ok(Command::Report { output }) => match report::generate_report(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
         Ok(Command::Help) => {
             print_help();
             ExitCode::SUCCESS
@@ -41,6 +52,7 @@ fn main() -> ExitCode {
 enum Command {
     Collect { output: PathBuf },
     Diagnose { output: PathBuf },
+    Report { output: PathBuf },
     Help,
 }
 
@@ -58,7 +70,7 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         }
         return Ok(Command::Help);
     }
-    if command != "collect" && command != "diagnose" {
+    if command != "collect" && command != "diagnose" && command != "report" {
         return Err(format!(
             "未対応のコマンドです: {}",
             command.to_string_lossy()
@@ -87,16 +99,17 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         return Err("余分な引数が指定されています".into());
     }
     let output = PathBuf::from(output);
-    Ok(if command == "collect" {
-        Command::Collect { output }
-    } else {
-        Command::Diagnose { output }
+    Ok(match command.to_string_lossy().as_ref() {
+        "collect" => Command::Collect { output },
+        "diagnose" => Command::Diagnose { output },
+        "report" => Command::Report { output },
+        _ => unreachable!(),
     })
 }
 
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n\n注記:\n  引数なし実行とreportは今後の実装で有効になります。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n注記:\n  引数なし実行は今後の実装で有効になります。",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -131,6 +144,16 @@ mod tests {
             ])
             .unwrap(),
             Command::Diagnose {
+                output: PathBuf::from("pcdiag-session")
+            }
+        );
+    }
+
+    #[test]
+    fn parses_report_session_directory() {
+        assert_eq!(
+            parse_args(["report".into(), "--output".into(), "pcdiag-session".into()]).unwrap(),
+            Command::Report {
                 output: PathBuf::from("pcdiag-session")
             }
         );

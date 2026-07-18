@@ -5,8 +5,8 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, ToolInfo,
-    load_collection_artifact, sha256_hex,
+    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, ToolInfo,
+    diagnose_collection, load_collection_artifact, load_diagnosis_artifact, sha256_hex,
 };
 
 const COLLECTION: &[u8] = include_bytes!("fixtures/memory-success-collection.json");
@@ -55,6 +55,58 @@ fn rejects_missing_declared_file() {
 
     assert!(error.path.ends_with("status.json"));
     remove(directory);
+}
+
+#[test]
+fn loads_diagnosis_only_when_it_matches_collection() {
+    let collection_directory = create_artifact();
+    let collection = load_collection_artifact(&collection_directory).unwrap();
+    let diagnosis_directory = collection_directory.parent().unwrap().join(format!(
+        "{}-diagnosis",
+        collection_directory.file_name().unwrap().to_string_lossy()
+    ));
+    if diagnosis_directory.exists() {
+        fs::remove_dir_all(&diagnosis_directory).unwrap();
+    }
+    fs::create_dir(&diagnosis_directory).unwrap();
+    let diagnosis = diagnose_collection(&collection.collection);
+    let diagnosis_bytes = serde_json::to_vec_pretty(&diagnosis).unwrap();
+    fs::write(diagnosis_directory.join("diagnosis.json"), &diagnosis_bytes).unwrap();
+    let manifest = ArtifactManifest {
+        manifest_schema_version: "1.0".into(),
+        artifact_schema_version: "2.0".into(),
+        session_id: collection.manifest.session_id.clone(),
+        artifact_id: "43d39e67-c8f1-4c9b-a20e-a65dbba20295".into(),
+        artifact_type: ArtifactType::Diagnosis,
+        status: ArtifactStatus::Complete,
+        started_at: "2026-07-18T01:31:00.000Z".into(),
+        completed_at: "2026-07-18T01:31:01.000Z".into(),
+        observed_utc_offset_minutes: 540,
+        duration_ms: 1_000,
+        tool: ToolInfo {
+            name: "pcdiag".into(),
+            version: "0.1.0".into(),
+        },
+        inputs: vec![ArtifactInput {
+            artifact_id: collection.manifest.artifact_id.clone(),
+            artifact_type: ArtifactType::Collection,
+        }],
+        files: vec![file("diagnosis.json", &diagnosis_bytes)],
+    };
+    fs::write(
+        diagnosis_directory.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let loaded = load_diagnosis_artifact(&diagnosis_directory, &collection).unwrap();
+    assert_eq!(
+        loaded.diagnosis.rule_set.version,
+        diagnosis.rule_set.version
+    );
+
+    remove(collection_directory);
+    remove(diagnosis_directory);
 }
 
 fn create_artifact() -> PathBuf {

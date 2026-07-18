@@ -9,7 +9,10 @@ pub mod rules;
 pub mod status;
 pub mod validation;
 
-pub use artifact::{ArtifactLoadError, LoadedCollectionArtifact, load_collection_artifact};
+pub use artifact::{
+    ArtifactLoadError, LoadedCollectionArtifact, LoadedDiagnosisArtifact, load_collection_artifact,
+    load_diagnosis_artifact,
+};
 pub use collection::{
     BootMode, ClockCollection, Collection, CommitMemory, ConnectedDevice, CpuCollection,
     CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, DeviceDriver, DeviceState,

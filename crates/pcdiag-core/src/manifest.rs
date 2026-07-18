@@ -134,6 +134,27 @@ impl ArtifactManifest {
                 "diagnosis artifact must have exactly one collection input",
             );
         }
+        if self.artifact_type == ArtifactType::Report
+            && (self.inputs.len() != 2
+                || self
+                    .inputs
+                    .iter()
+                    .filter(|input| input.artifact_type == ArtifactType::Collection)
+                    .count()
+                    != 1
+                || self
+                    .inputs
+                    .iter()
+                    .filter(|input| input.artifact_type == ArtifactType::Diagnosis)
+                    .count()
+                    != 1)
+        {
+            push(
+                &mut errors,
+                "/inputs",
+                "report artifact must have exactly one collection and one diagnosis input",
+            );
+        }
         for (index, input) in self.inputs.iter().enumerate() {
             if !is_uuid_v4(&input.artifact_id) {
                 push(
@@ -189,6 +210,11 @@ impl ArtifactManifest {
             && !self.files.iter().any(|file| file.path == "diagnosis.json")
         {
             push(&mut errors, "/files", "must contain diagnosis.json");
+        }
+        if self.artifact_type == ArtifactType::Report
+            && !self.files.iter().any(|file| file.path == "report.html")
+        {
+            push(&mut errors, "/files", "must contain report.html");
         }
 
         if errors.is_empty() {
@@ -333,5 +359,31 @@ mod tests {
             display_id("a3f17c92-d604-4be8-9ea7-6ab7b92e41c5").as_deref(),
             Some("a3f17c92d604")
         );
+    }
+
+    #[test]
+    fn validates_report_manifest_inputs_and_file() {
+        let mut value = manifest();
+        value.artifact_type = ArtifactType::Report;
+        value.inputs = vec![
+            ArtifactInput {
+                artifact_id: "211444ae-9a5c-4bf7-9349-80af85af3c04".into(),
+                artifact_type: ArtifactType::Collection,
+            },
+            ArtifactInput {
+                artifact_id: "43d39e67-c8f1-4c9b-a20e-a65dbba20295".into(),
+                artifact_type: ArtifactType::Diagnosis,
+            },
+        ];
+        value.files = vec![ArtifactFile {
+            path: "report.html".into(),
+            media_type: "text/html; charset=utf-8".into(),
+            size_bytes: 1,
+            sha256: "0".repeat(64),
+        }];
+
+        value.validate().unwrap();
+        value.inputs.pop();
+        assert!(value.validate().is_err());
     }
 }
