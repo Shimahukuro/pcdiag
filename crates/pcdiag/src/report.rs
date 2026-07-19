@@ -598,6 +598,11 @@ impl From<pcdiag_core::ManifestValidationErrors> for ReportError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcdiag_core::{ArtifactFile, CollectionStatus, diagnose_collection};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
     #[test]
     fn escapes_html_special_characters() {
         assert_eq!(
@@ -645,5 +650,131 @@ mod tests {
         assert!(text.contains("予備領域: 100%"));
         assert!(text.contains("使用率: 30%"));
         assert!(text.contains("温度: 30 °C"));
+    }
+
+    #[test]
+    fn writes_report_manifest_and_refuses_to_overwrite() {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("pcdiag-report-test-{}-{id}", std::process::id()));
+        if root.exists() {
+            fs::remove_dir_all(&root).unwrap();
+        }
+        fs::create_dir(&root).unwrap();
+        let (collection, diagnosis) = loaded_inputs();
+        let html = render_html(&collection, &diagnosis);
+
+        let directory = write_report(
+            &root,
+            collection.clone(),
+            diagnosis.clone(),
+            html.as_bytes(),
+            report_timing("43d39e67-c8f1-4c9b-a20e-a65dbba20295"),
+        )
+        .unwrap();
+
+        assert_eq!(directory, root.join("report"));
+        assert_eq!(
+            fs::read_to_string(directory.join("report.html")).unwrap(),
+            html
+        );
+        let manifest: ArtifactManifest =
+            serde_json::from_slice(&fs::read(directory.join("manifest.json")).unwrap()).unwrap();
+        manifest.validate().unwrap();
+        assert_eq!(manifest.artifact_type, ArtifactType::Report);
+        assert_eq!(manifest.inputs.len(), 2);
+        assert_eq!(manifest.files[0].media_type, "text/html; charset=utf-8");
+
+        let error = write_report(
+            &root,
+            collection,
+            diagnosis,
+            html.as_bytes(),
+            report_timing("55bc50ea-219a-480e-84aa-486c5ce07336"),
+        )
+        .unwrap_err();
+        assert!(matches!(error, ReportError::AlreadyExists(_)));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn loaded_inputs() -> (LoadedCollectionArtifact, LoadedDiagnosisArtifact) {
+        let collection: Collection = serde_json::from_str(include_str!(
+            "../../pcdiag-core/tests/fixtures/memory-success-collection.json"
+        ))
+        .unwrap();
+        let status: CollectionStatus = serde_json::from_str(include_str!(
+            "../../pcdiag-core/tests/fixtures/memory-success-status.json"
+        ))
+        .unwrap();
+        let diagnosis_value = diagnose_collection(&collection);
+        let collection_manifest = ArtifactManifest {
+            manifest_schema_version: "1.0".into(),
+            artifact_schema_version: "2.0".into(),
+            session_id: "a3f17c92-d604-4be8-9ea7-6ab7b92e41c5".into(),
+            artifact_id: "831d1074-1145-4a66-bfa2-169903866adb".into(),
+            artifact_type: ArtifactType::Collection,
+            status: ArtifactStatus::Complete,
+            started_at: "2026-07-18T01:00:00.000Z".into(),
+            completed_at: "2026-07-18T01:00:01.000Z".into(),
+            observed_utc_offset_minutes: 540,
+            duration_ms: 1_000,
+            tool: ToolInfo {
+                name: "pcdiag".into(),
+                version: "0.1.0".into(),
+            },
+            inputs: vec![],
+            files: vec![test_file("collection.json"), test_file("status.json")],
+        };
+        let diagnosis_manifest = ArtifactManifest {
+            manifest_schema_version: "1.0".into(),
+            artifact_schema_version: "2.0".into(),
+            session_id: collection_manifest.session_id.clone(),
+            artifact_id: "211444ae-9a5c-4bf7-9349-80af85af3c04".into(),
+            artifact_type: ArtifactType::Diagnosis,
+            status: ArtifactStatus::Complete,
+            started_at: "2026-07-18T01:01:00.000Z".into(),
+            completed_at: "2026-07-18T01:01:01.000Z".into(),
+            observed_utc_offset_minutes: 540,
+            duration_ms: 1_000,
+            tool: ToolInfo {
+                name: "pcdiag".into(),
+                version: "0.1.0".into(),
+            },
+            inputs: vec![ArtifactInput {
+                artifact_id: collection_manifest.artifact_id.clone(),
+                artifact_type: ArtifactType::Collection,
+            }],
+            files: vec![test_file("diagnosis.json")],
+        };
+        (
+            LoadedCollectionArtifact {
+                manifest: collection_manifest,
+                collection,
+                status,
+            },
+            LoadedDiagnosisArtifact {
+                manifest: diagnosis_manifest,
+                diagnosis: diagnosis_value,
+            },
+        )
+    }
+
+    fn test_file(path: &str) -> ArtifactFile {
+        ArtifactFile {
+            path: path.into(),
+            media_type: "application/json".into(),
+            size_bytes: 1,
+            sha256: "0".repeat(64),
+        }
+    }
+
+    fn report_timing(artifact_id: &str) -> ReportTiming {
+        ReportTiming {
+            artifact_id: artifact_id.into(),
+            started_at: "2026-07-18T01:02:00.000Z".into(),
+            completed_at: "2026-07-18T01:02:01.000Z".into(),
+            observed_utc_offset_minutes: 540,
+            duration_ms: 1_000,
+        }
     }
 }

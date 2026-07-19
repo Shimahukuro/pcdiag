@@ -143,15 +143,41 @@ fn print_help() {
 }
 
 fn run_default_pipeline(output_root: &Path) -> Result<PathBuf, String> {
+    run_pipeline(
+        output_root,
+        |output| {
+            bundle::collect_to_bundle(output)
+                .map_err(|error| format!("collectに失敗しました: {error}"))
+        },
+        |session| {
+            diagnose::diagnose_bundle(session)
+                .map(|_| ())
+                .map_err(|error| format!("diagnoseに失敗しました: {error}"))
+        },
+        |session| {
+            report::generate_report(session)
+                .map_err(|error| format!("reportに失敗しました: {error}"))
+        },
+    )
+}
+
+fn run_pipeline<C, D, R>(
+    output_root: &Path,
+    collect: C,
+    diagnose: D,
+    report: R,
+) -> Result<PathBuf, String>
+where
+    C: FnOnce(&Path) -> Result<PathBuf, String>,
+    D: FnOnce(&Path) -> Result<(), String>,
+    R: FnOnce(&Path) -> Result<PathBuf, String>,
+{
     eprintln!("pcdiag: 情報収集を開始します");
-    let session = bundle::collect_to_bundle(output_root)
-        .map_err(|error| format!("collectに失敗しました: {error}"))?;
+    let session = collect(output_root)?;
     eprintln!("pcdiag: 診断を開始します: {}", session.display());
-    diagnose::diagnose_bundle(&session)
-        .map_err(|error| format!("diagnoseに失敗しました: {error}"))?;
+    diagnose(&session)?;
     eprintln!("pcdiag: レポートを生成します: {}", session.display());
-    let report = report::generate_report(&session)
-        .map_err(|error| format!("reportに失敗しました: {error}"))?;
+    let report = report(&session)?;
     eprintln!("pcdiag: 完了しました");
     Ok(report)
 }
@@ -159,6 +185,7 @@ fn run_default_pipeline(output_root: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, rc::Rc};
 
     #[test]
     fn parses_collect_output() {
@@ -215,5 +242,77 @@ mod tests {
                 output: PathBuf::from("pcdiag-session")
             }
         );
+    }
+
+    #[test]
+    fn default_pipeline_uses_one_session_in_order() {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let session = PathBuf::from("results/pcdiag-session");
+        let report_directory = session.join("report");
+
+        let actual = run_pipeline(
+            Path::new("results"),
+            {
+                let calls = Rc::clone(&calls);
+                let session = session.clone();
+                move |output| {
+                    calls
+                        .borrow_mut()
+                        .push(format!("collect:{}", output.display()));
+                    Ok(session)
+                }
+            },
+            {
+                let calls = Rc::clone(&calls);
+                move |input| {
+                    calls
+                        .borrow_mut()
+                        .push(format!("diagnose:{}", input.display()));
+                    Ok(())
+                }
+            },
+            {
+                let calls = Rc::clone(&calls);
+                let report_directory = report_directory.clone();
+                move |input| {
+                    calls
+                        .borrow_mut()
+                        .push(format!("report:{}", input.display()));
+                    Ok(report_directory)
+                }
+            },
+        )
+        .unwrap();
+
+        assert_eq!(actual, session.join("report"));
+        assert_eq!(
+            *calls.borrow(),
+            [
+                "collect:results",
+                "diagnose:results/pcdiag-session",
+                "report:results/pcdiag-session"
+            ]
+        );
+    }
+
+    #[test]
+    fn default_pipeline_stops_after_a_failed_stage() {
+        let report_called = Rc::new(RefCell::new(false));
+        let error = run_pipeline(
+            Path::new("results"),
+            |_| Ok(PathBuf::from("results/pcdiag-session")),
+            |_| Err("diagnose error".into()),
+            {
+                let report_called = Rc::clone(&report_called);
+                move |_| {
+                    *report_called.borrow_mut() = true;
+                    Ok(PathBuf::from("unreachable"))
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "diagnose error");
+        assert!(!*report_called.borrow());
     }
 }
