@@ -90,6 +90,15 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+## CI
+
+GitHub Actionsはpush、Pull Requestおよび手動実行を契機として、次を確認します。
+
+- Ubuntu: `cargo fmt`、ワークスペース全体のテスト、Clippy
+- Windows: ワークスペース全体のテスト、Releaseビルド、`pcdiag.exe --help`による起動確認
+
+CIでは依存関係を`Cargo.lock`に固定して実行します。Windows固有APIの実デバイスに対する動作や管理者権限による差は、CIではなくWindows実機で確認します。
+
 ## Workspace
 
 ```text

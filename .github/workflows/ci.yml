@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format, test, and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        run: >-
+          rustup toolchain install stable
+          --profile minimal
+          --component rustfmt
+          --component clippy
+
+      - name: Select Rust stable
+        run: rustup default stable
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  windows:
+    name: Windows build and test
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Select Rust stable
+        run: rustup default stable
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Build release executable
+        run: cargo build --release --locked -p pcdiag
+
+      - name: Verify executable startup
+        run: .\target\release\pcdiag.exe --help
