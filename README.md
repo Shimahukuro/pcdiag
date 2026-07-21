@@ -118,6 +118,12 @@ crates/
 
 詳しい仕様は[`docs`](docs/)を参照してください。
 
+## バグ報告とセキュリティ
+
+バグを報告する前に、Issue templateの注意事項を確認してください。診断セッション、JSON、HTML、ログ、画面画像には実機を識別できる情報が含まれる可能性があるため、未確認のまま公開Issueへ添付しないでください。
+
+セキュリティ上の問題は公開Issueへ投稿せず、[`SECURITY.md`](SECURITY.md)に従って非公開で報告してください。コントリビューションについては[`CONTRIBUTING.md`](CONTRIBUTING.md)を参照してください。
+
 ## License
 
 Apache License 2.0
