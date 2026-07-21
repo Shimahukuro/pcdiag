@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: セキュリティ脆弱性の非公開報告
+    url: https://github.com/Shimahukuro/pcdiag/security/advisories/new
+    about: 脆弱性の詳細は公開Issueへ投稿せず、こちらから報告してください。

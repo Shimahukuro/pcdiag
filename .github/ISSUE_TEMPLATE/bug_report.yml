@@ -1,0 +1,98 @@
+name: バグ報告
+description: pcdiagの再現可能な不具合を報告します
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        報告ありがとうございます。
+
+        **診断セッション、JSON、HTML、ログ、画面画像には実機を識別できる情報が含まれる可能性があります。未確認のファイルを添付しないでください。**
+
+        セキュリティ脆弱性はこのフォームを使わず、Securityページから非公開で報告してください。
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: 送信前の確認
+      options:
+        - label: 同じ内容のIssueがないことを確認しました。
+          required: true
+        - label: セキュリティ脆弱性の公開報告ではありません。
+          required: true
+        - label: 添付内容に個人情報、シリアル番号、デバイス識別子、パス、ネットワーク情報などがないことを確認しました。
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: pcdiagのバージョン
+      description: バージョンまたはコミットIDを記載してください。
+      placeholder: "例: 0.1.0 または 4a8869c"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windowsのバージョン
+      description: エディションとバージョンを、分かる範囲で記載してください。
+      placeholder: "例: Windows 11 24H2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: privilege
+    attributes:
+      label: 実行権限
+      options:
+        - 通常権限
+        - 管理者権限
+        - 不明
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: 実行したコマンド
+      description: ユーザー名や実際のパスは、`<出力先>`などに置き換えてください。
+      render: powershell
+      placeholder: pcdiag.exe --output <出力先>
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: エラーや問題の内容を、機密情報を除いて記載してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 最小限の再現手順を記載してください。
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 補足
+      description: 未加工の収集成果物は添付しないでください。追加資料が必要な場合はメンテナーから案内します。
