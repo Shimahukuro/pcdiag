@@ -20,9 +20,8 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# Mac specific files
 .DS_Store
 
 # Real-machine verification files may contain sensitive information
-/test-results/**
-!/test-results/windows/
-!/test-results/windows/.gitkeep
+/test-results/
