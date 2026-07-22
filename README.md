@@ -63,7 +63,7 @@ pcdiag-YYYYMMDD-HHMMSS-ID/
     └── manifest.json
 ```
 
-`report.html`は一般的なWebブラウザーで開けます。PDFファイルの直接生成は未実装ですが、ブラウザーの印刷機能からPDFへ保存できます。
+`report.html`は一般的なWebブラウザーで開けます。
 
 ## 権限
 
