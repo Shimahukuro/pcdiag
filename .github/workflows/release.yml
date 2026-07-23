@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Build and publish Windows release
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Select Rust stable
+        run: rustup default stable
+
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Build release executable
+        run: cargo build --release --locked -p pcdiag
+
+      - name: Verify executable startup
+        run: .\target\release\pcdiag.exe --help
+
+      - name: Create release package
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tag = "${{ github.ref_name }}"
+          $packageName = "pcdiag-$tag-windows-x86_64"
+          $stagingDirectory = Join-Path $PWD "dist\$packageName"
+          $archiveName = "$packageName.zip"
+          $archivePath = Join-Path $PWD "dist\$archiveName"
+
+          New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
+          Copy-Item "target\release\pcdiag.exe" $stagingDirectory
+          Copy-Item "README.md" $stagingDirectory
+          Copy-Item "LICENSE" $stagingDirectory
+
+          Compress-Archive `
+            -Path "$stagingDirectory\*" `
+            -DestinationPath $archivePath `
+            -CompressionLevel Optimal
+
+          $sha256 = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha256  $archiveName" |
+            Set-Content -Path "dist\SHA256SUMS" -Encoding ascii
+
+          @'
+          `pcdiag`の初期開発版です。
+
+          - Windows 10およびWindows 11のx86-64環境を対象とします。
+          - インストールは不要です。ZIPを展開して`pcdiag.exe`を実行してください。
+          - 通常権限でも実行できますが、SMARTなど一部の情報取得には管理者権限が必要です。
+          - 診断成果物には実機を識別できる情報が含まれる可能性があります。外部へ提供する前に内容を確認してください。
+          - 実行ファイルは未署名のため、Windows SmartScreenの警告が表示される可能性があります。
+
+          `SHA256SUMS`でダウンロードしたZIPの整合性を確認できます。
+          '@ | Set-Content -Path "dist\release-notes.md" -Encoding utf8
+
+          "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
+          "checksum_path=$(Join-Path $PWD 'dist\SHA256SUMS')" >> $env:GITHUB_OUTPUT
+          "notes_path=$(Join-Path $PWD 'dist\release-notes.md')" >> $env:GITHUB_OUTPUT
+
+      - name: Create or update GitHub prerelease
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag `
+              --repo $env:GITHUB_REPOSITORY `
+              --title "pcdiag $tag" `
+              --notes-file "${{ steps.package.outputs.notes_path }}" `
+              --prerelease `
+              --verify-tag
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
+
+          gh release upload $tag `
+            "${{ steps.package.outputs.archive_path }}" `
+            "${{ steps.package.outputs.checksum_path }}" `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
