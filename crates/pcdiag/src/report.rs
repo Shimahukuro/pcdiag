@@ -131,7 +131,7 @@ fn render_html(
     let mut html = String::from(
         "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>pcdiag 診断レポート</title><style>\
         :root{color-scheme:light;--bg:#f4f6f8;--card:#fff;--ink:#17202a;--muted:#607080;--line:#dce2e7;--ok:#18794e;--info:#1f6feb;--warn:#9a6700;--error:#cf222e;--critical:#7a0019}\
-        *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}@media print{body{background:#fff}main{max-width:none;padding:0}section{break-inside:avoid;border-color:#bbb}}\
+        *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}.artifact-notice{background:#fff8c5;border:1px solid #d4a72c;border-radius:10px;padding:20px;margin-top:18px}.artifact-notice h2{font-size:1.1rem}.artifact-notice p{margin-bottom:0}@media print{body{background:#fff}main{max-width:none;padding:0}section,.artifact-notice{break-inside:avoid;border-color:#777}}\
         </style></head><body><main>",
     );
     let collection_is_partial = collection.manifest.status == ArtifactStatus::Partial;
@@ -176,6 +176,7 @@ fn render_html(
     render_devices(&mut html, data);
     render_collection_status(&mut html, &collection.status);
     write!(html, "<section><h2>成果物情報</h2><table><tr><th>収集</th><td><code>{}</code> ({:?})</td></tr><tr><th>診断</th><td><code>{}</code> ({:?})</td></tr><tr><th>レポート生成ツール</th><td>pcdiag {}</td></tr></table></section>", escape(&collection.manifest.artifact_id), collection.manifest.status, escape(&diagnosis.manifest.artifact_id), diagnosis.manifest.status, env!("CARGO_PKG_VERSION")).unwrap();
+    html.push_str("<footer class=\"artifact-notice\"><h2>成果物の取り扱いに関する注意</h2><p>この診断成果物には、診断に必要な端末情報、アカウント識別情報、ネットワーク情報、ファイルパス、イベント内容などが含まれる場合があります。保存先、共有範囲、保管期間、廃棄は担当者が管理してください。pcdiagは成果物を自動削除しません。</p></footer>");
     html.push_str("</main></body></html>\n");
     html
 }
@@ -650,6 +651,18 @@ mod tests {
         assert!(text.contains("予備領域: 100%"));
         assert!(text.contains("使用率: 30%"));
         assert!(text.contains("温度: 30 °C"));
+    }
+
+    #[test]
+    fn renders_artifact_handling_notice_in_footer() {
+        let (collection, diagnosis) = loaded_inputs();
+        let html = render_html(&collection, &diagnosis);
+
+        assert!(html.contains("<footer class=\"artifact-notice\">"));
+        assert!(html.contains("成果物の取り扱いに関する注意"));
+        assert!(html.contains("pcdiagは成果物を自動削除しません。"));
+        assert!(html.contains(".artifact-notice{"));
+        assert!(html.contains("section,.artifact-notice{break-inside:avoid"));
     }
 
     #[test]
