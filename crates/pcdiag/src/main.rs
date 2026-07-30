@@ -70,7 +70,7 @@ fn main() -> ExitCode {
 
 const SENSITIVE_DATA_NOTICE: &str = "\
 pcdiag: 注意: 診断成果物には、端末や利用者を識別し得る情報が含まれる場合があります。
-pcdiag: 保存先、共有範囲、保管期間、廃棄は担当者が管理してください。成果物は自動削除されません。";
+pcdiag: 注意: 保存先、共有範囲、保管期間、廃棄は担当者が管理してください。成果物は自動削除されません。";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -232,6 +232,11 @@ mod tests {
             assert!(command.handles_artifacts());
         }
         assert!(!Command::Help.handles_artifacts());
+        assert!(
+            SENSITIVE_DATA_NOTICE
+                .lines()
+                .all(|line| line.starts_with("pcdiag: 注意: "))
+        );
         assert!(SENSITIVE_DATA_NOTICE.contains("端末や利用者を識別し得る情報"));
         assert!(SENSITIVE_DATA_NOTICE.contains("成果物は自動削除されません"));
     }
