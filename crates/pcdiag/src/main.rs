@@ -9,58 +9,68 @@ use std::{
 };
 
 fn main() -> ExitCode {
-    match parse_args(std::env::args_os().skip(1)) {
-        Ok(Command::DefaultPipeline { output }) => match run_default_pipeline(&output) {
-            Ok(path) => {
-                println!("{}", path.display());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
-            }
-        },
-        Ok(Command::Collect { output }) => match bundle::collect_to_bundle(&output) {
-            Ok(path) => {
-                println!("{}", path.display());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
-            }
-        },
-        Ok(Command::Diagnose { output }) => match diagnose::diagnose_bundle(&output) {
-            Ok(path) => {
-                println!("{}", path.display());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
-            }
-        },
-        Ok(Command::Report { output }) => match report::generate_report(&output) {
-            Ok(path) => {
-                println!("{}", path.display());
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
-            }
-        },
-        Ok(Command::Help) => {
-            print_help();
-            ExitCode::SUCCESS
-        }
+    let command = match parse_args(std::env::args_os().skip(1)) {
+        Ok(command) => command,
         Err(message) => {
             eprintln!("pcdiag: {message}");
             eprintln!("使用方法は pcdiag --help で確認できます。");
-            ExitCode::from(2)
+            return ExitCode::from(2);
+        }
+    };
+    if command.handles_artifacts() {
+        eprintln!("{SENSITIVE_DATA_NOTICE}");
+    }
+    match command {
+        Command::DefaultPipeline { output } => match run_default_pipeline(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Collect { output } => match bundle::collect_to_bundle(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Diagnose { output } => match diagnose::diagnose_bundle(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Report { output } => match report::generate_report(&output) {
+            Ok(path) => {
+                println!("{}", path.display());
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("pcdiag: {error}");
+                ExitCode::from(1)
+            }
+        },
+        Command::Help => {
+            print_help();
+            ExitCode::SUCCESS
         }
     }
 }
+
+const SENSITIVE_DATA_NOTICE: &str = "\
+pcdiag: 注意: 診断成果物には、端末や利用者を識別し得る情報が含まれる場合があります。
+pcdiag: 注意: 保存先、共有範囲、保管期間、廃棄は担当者が管理してください。成果物は自動削除されません。";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
@@ -69,6 +79,12 @@ enum Command {
     Diagnose { output: PathBuf },
     Report { output: PathBuf },
     Help,
+}
+
+impl Command {
+    fn handles_artifacts(&self) -> bool {
+        !matches!(self, Self::Help)
+    }
 }
 
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
@@ -195,6 +211,34 @@ mod tests {
                 output: PathBuf::from("results")
             }
         );
+    }
+
+    #[test]
+    fn shows_sensitive_data_notice_only_for_artifact_commands() {
+        for command in [
+            Command::DefaultPipeline {
+                output: PathBuf::from("."),
+            },
+            Command::Collect {
+                output: PathBuf::from("results"),
+            },
+            Command::Diagnose {
+                output: PathBuf::from("session"),
+            },
+            Command::Report {
+                output: PathBuf::from("session"),
+            },
+        ] {
+            assert!(command.handles_artifacts());
+        }
+        assert!(!Command::Help.handles_artifacts());
+        assert!(
+            SENSITIVE_DATA_NOTICE
+                .lines()
+                .all(|line| line.starts_with("pcdiag: 注意: "))
+        );
+        assert!(SENSITIVE_DATA_NOTICE.contains("端末や利用者を識別し得る情報"));
+        assert!(SENSITIVE_DATA_NOTICE.contains("成果物は自動削除されません"));
     }
 
     #[test]
