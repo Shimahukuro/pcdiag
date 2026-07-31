@@ -88,12 +88,12 @@ struct PowerShellEvent {
 }
 
 #[cfg(any(windows, test))]
-fn parse_events(json: &str) -> Result<Vec<EventLogEntry>, String> {
-    if json.trim().is_empty() {
+fn parse_events(json: &[u8]) -> Result<Vec<EventLogEntry>, String> {
+    if json.iter().all(u8::is_ascii_whitespace) {
         return Ok(Vec::new());
     }
     let events: Vec<PowerShellEvent> =
-        serde_json::from_str(json).map_err(|error| error.to_string())?;
+        serde_json::from_slice(json).map_err(|error| error.to_string())?;
     Ok(events
         .into_iter()
         .map(|event| {
@@ -115,28 +115,38 @@ fn parse_events(json: &str) -> Result<Vec<EventLogEntry>, String> {
         .collect())
 }
 
+#[cfg(any(windows, test))]
+fn powershell_script(log: &str, lookback_days: u32) -> String {
+    let filter = if log == "Security" {
+        format!("@{{LogName='{log}'; StartTime=$start; Id=1102,4625,4719}}")
+    } else {
+        format!("@{{LogName='{log}'; StartTime=$start; Level=1,2,3}}")
+    };
+    format!(
+        "$ErrorActionPreference='Stop'; $start=(Get-Date).AddDays(-{lookback_days}); \
+         try {{ $events=Get-WinEvent -FilterHashtable {filter} -MaxEvents 1000 }} \
+         catch {{ if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') {{$events=@()}} else {{throw}} }}; \
+         $result=@($events | ForEach-Object {{ [pscustomobject]@{{TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');LogName=$_.LogName;ProviderName=$_.ProviderName;Id=$_.Id;Level=[int]$_.Level;Message=$_.Message}} }}); \
+         $json=ConvertTo-Json -InputObject $result -Compress; \
+         $bytes=[System.Text.UTF8Encoding]::new($false).GetBytes($json); \
+         $stdout=[Console]::OpenStandardOutput(); \
+         $stdout.Write($bytes,0,$bytes.Length)"
+    )
+}
+
 #[cfg(windows)]
 mod platform {
     use std::process::Command;
 
-    use super::{CollectionFailure, EventLogEntry, FieldCollectionStatus, parse_events};
+    use super::{
+        CollectionFailure, EventLogEntry, FieldCollectionStatus, parse_events, powershell_script,
+    };
 
     pub(super) fn query(
         log: &str,
         lookback_days: u32,
     ) -> Result<Vec<EventLogEntry>, CollectionFailure> {
-        let filter = if log == "Security" {
-            format!("@{{LogName='{log}'; StartTime=$start; Id=1102,4625,4719}}")
-        } else {
-            format!("@{{LogName='{log}'; StartTime=$start; Level=1,2,3}}")
-        };
-        let script = format!(
-            "$ErrorActionPreference='Stop'; $start=(Get-Date).AddDays(-{lookback_days}); \
-             try {{ $events=Get-WinEvent -FilterHashtable {filter} -MaxEvents 1000 }} \
-             catch {{ if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') {{$events=@()}} else {{throw}} }}; \
-             $result=@($events | ForEach-Object {{ [pscustomobject]@{{TimeCreated=$_.TimeCreated.ToUniversalTime().ToString('o');LogName=$_.LogName;ProviderName=$_.ProviderName;Id=$_.Id;Level=[int]$_.Level;Message=$_.Message}} }}); \
-             ConvertTo-Json -InputObject $result -Compress"
-        );
+        let script = powershell_script(log, lookback_days);
         let output = Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .output()
@@ -169,11 +179,10 @@ mod platform {
                 },
             });
         }
-        parse_events(&String::from_utf8_lossy(&output.stdout)).map_err(|_| CollectionFailure {
+        parse_events(&output.stdout).map_err(|_| CollectionFailure {
             code: "event_log_invalid_output",
             native_code: None,
-            message: "イベントログの応答を解析できませんでした（ログ破損の可能性があります）"
-                .into(),
+            message: "Windows PowerShellの応答をJSONとして解析できませんでした".into(),
             status: FieldCollectionStatus::InvalidValue,
         })
     }
@@ -202,10 +211,33 @@ mod tests {
 
     #[test]
     fn parses_powershell_event_array() {
-        let events = parse_events(r#"[{"TimeCreated":"2026-07-01T00:00:00.0000000Z","LogName":"System","ProviderName":"Disk","Id":7,"Level":2,"Message":"bad sector"}]"#).unwrap();
+        let events = parse_events(br#"[{"TimeCreated":"2026-07-01T00:00:00.0000000Z","LogName":"System","ProviderName":"Disk","Id":7,"Level":2,"Message":"bad sector"}]"#).unwrap();
         assert_eq!(events[0].event_id, 7);
         assert_eq!(events[0].level, EventLogLevel::Error);
         assert_eq!(events[0].summary, "bad sector");
+    }
+
+    #[test]
+    fn powershell_writes_json_as_bomless_utf8() {
+        let script = powershell_script("System", 30);
+        assert!(script.contains("[System.Text.UTF8Encoding]::new($false)"));
+        assert!(script.contains("[Console]::OpenStandardOutput()"));
+        assert!(script.contains("$stdout.Write($bytes,0,$bytes.Length)"));
+    }
+
+    #[test]
+    fn rejects_non_utf8_output_instead_of_replacing_bytes() {
+        assert!(parse_events(b"[\"\x82\xa0\"]").is_err());
+    }
+
+    #[test]
+    fn parses_utf8_japanese_event_message() {
+        let events = parse_events(
+            r#"[{"TimeCreated":"2026-07-01T00:00:00Z","LogName":"System","ProviderName":"Disk","Id":7,"Level":2,"Message":"ディスクでエラーが検出されました"}]"#
+                .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(events[0].summary, "ディスクでエラーが検出されました");
     }
 
     #[test]

@@ -191,17 +191,25 @@ fn render_event_logs(html: &mut String, data: &Collection) {
     )
     .unwrap();
     html.push_str("<table><thead><tr><th>重大度</th><th>発生時刻</th><th>概要</th><th>ログ名</th><th>対処の目安</th></tr></thead><tbody>");
-    let mut count = 0;
-    for events in [
-        data.event_logs.system.as_deref(),
-        data.event_logs.application.as_deref(),
-        data.event_logs.security.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
+    let mut event_count = 0;
+    let mut available_logs = 0;
+    for (log_name, events) in [
+        ("System", data.event_logs.system.as_deref()),
+        ("Application", data.event_logs.application.as_deref()),
+        ("Security", data.event_logs.security.as_deref()),
+    ] {
+        let Some(events) = events else {
+            write!(
+                html,
+                "<tr><td class=\"warning\">未取得</td><td>—</td><td>収集状態で取得不能理由を確認してください。</td><td>{}</td><td>権限、イベントログサービス、監査設定、ログの状態を確認してください。</td></tr>",
+                log_name,
+            )
+            .unwrap();
+            continue;
+        };
+        available_logs += 1;
         for event in events {
-            count += 1;
+            event_count += 1;
             let (severity, recommendation) =
                 event_log_display(event.log_name.as_str(), event.event_id, event.level);
             write!(
@@ -219,7 +227,7 @@ fn render_event_logs(html: &mut String, data: &Collection) {
             .unwrap();
         }
     }
-    if count == 0 {
+    if event_count == 0 && available_logs > 0 {
         html.push_str("<tr><td colspan=\"5\" class=\"passed\">取得できた範囲に高優先度イベントはありません。</td></tr>");
     }
     html.push_str("</tbody></table></section>");
@@ -755,6 +763,19 @@ mod tests {
         assert!(html.contains("障害アプリケーションとモジュール"));
         assert!(html.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
         assert!(!html.contains("<script>alert"));
+    }
+
+    #[test]
+    fn distinguishes_unavailable_event_logs_from_no_findings() {
+        let (mut collection, mut diagnosis) = loaded_inputs();
+        collection.collection.event_logs.system = None;
+        collection.collection.event_logs.application = None;
+        collection.collection.event_logs.security = None;
+        diagnosis.diagnosis = diagnose_collection(&collection.collection);
+        let html = render_html(&collection, &diagnosis);
+
+        assert_eq!(html.matches("収集状態で取得不能理由を確認").count(), 3);
+        assert!(!html.contains("取得できた範囲に高優先度イベントはありません。"));
     }
 
     #[test]
