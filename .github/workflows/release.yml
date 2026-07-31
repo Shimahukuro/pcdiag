@@ -60,8 +60,12 @@ jobs:
             -CompressionLevel Optimal
 
           $sha256 = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$sha256  $archiveName" |
-            Set-Content -Path "dist\SHA256SUMS" -Encoding ascii
+          $checksumPath = Join-Path $PWD "dist\SHA256SUMS"
+          [System.IO.File]::WriteAllText(
+            $checksumPath,
+            "$sha256  $archiveName`n",
+            [System.Text.Encoding]::ASCII
+          )
 
           @'
           `pcdiag`の初期開発版です。
@@ -76,7 +80,7 @@ jobs:
           '@ | Set-Content -Path "dist\release-notes.md" -Encoding utf8
 
           "archive_path=$archivePath" >> $env:GITHUB_OUTPUT
-          "checksum_path=$(Join-Path $PWD 'dist\SHA256SUMS')" >> $env:GITHUB_OUTPUT
+          "checksum_path=$checksumPath" >> $env:GITHUB_OUTPUT
           "notes_path=$(Join-Path $PWD 'dist\release-notes.md')" >> $env:GITHUB_OUTPUT
 
       - name: Create or update GitHub prerelease
