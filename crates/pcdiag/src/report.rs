@@ -10,7 +10,8 @@ use pcdiag_core::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, Collection,
     CollectionStatus, Diagnosis, DiskSmart, Evidence, LoadedCollectionArtifact,
     LoadedDiagnosisArtifact, RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo,
-    load_collection_artifact, load_diagnosis_artifact, sha256_hex,
+    WindowsUpdateHistoryEntry, WindowsUpdateResult, load_collection_artifact,
+    load_diagnosis_artifact, sha256_hex,
 };
 
 use crate::bundle::{self, pretty_json, write_new};
@@ -132,7 +133,7 @@ fn render_html(
         "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>pcdiag 診断レポート</title><style>\
         :root{color-scheme:light;--bg:#f4f6f8;--card:#fff;--ink:#17202a;--muted:#607080;--line:#dce2e7;--ok:#18794e;--info:#1f6feb;--warn:#9a6700;--error:#cf222e;--critical:#7a0019}\
         *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}.artifact-notice{background:#fff8c5;border:1px solid #d4a72c;border-radius:10px;padding:20px;margin-top:18px}.artifact-notice h2{font-size:1.1rem}.artifact-notice p{margin-bottom:0}@media print{body{background:#fff}main{max-width:none;padding:0}section,.artifact-notice{break-inside:avoid;border-color:#777}}\
-        details>summary{cursor:pointer;font-size:1.35rem;font-weight:700}details[open]>summary{margin-bottom:12px}\
+        details>summary{cursor:pointer;font-size:1.35rem;font-weight:700}details[open]>summary{margin-bottom:12px}.accordion-stack{display:grid;gap:10px}.accordion-stack details{border:1px solid var(--line);border-radius:8px;padding:10px 12px}.accordion-stack details>summary{font-size:1rem}.table-wrap{overflow-x:auto}.update-title{min-width:300px}.nowrap{white-space:nowrap}\
         </style></head><body><main>",
     );
     let collection_is_partial = collection.manifest.status == ArtifactStatus::Partial;
@@ -172,6 +173,7 @@ fn render_html(
     }
     render_findings(&mut html, result);
     render_event_logs(&mut html, data, result);
+    render_windows_updates(&mut html, data);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
     render_storage(&mut html, data);
@@ -181,6 +183,187 @@ fn render_html(
     html.push_str("<footer class=\"artifact-notice\"><h2>成果物の取り扱いに関する注意</h2><p>この診断成果物には、診断に必要な端末情報、アカウント識別情報、ネットワーク情報、ファイルパス、イベント内容などが含まれる場合があります。保存先、共有範囲、保管期間、廃棄は担当者が管理してください。pcdiagは成果物を自動削除しません。</p></footer>");
     html.push_str("</main></body></html>\n");
     html
+}
+
+fn render_windows_updates(html: &mut String, data: &Collection) {
+    let Some(history) = &data.windows_updates.history else {
+        html.push_str(
+            "<section><h2>Windows Update</h2><p>更新履歴を取得できませんでした。</p></section>",
+        );
+        return;
+    };
+    let mut succeeded: Vec<_> = history
+        .iter()
+        .filter(|entry| entry.result == WindowsUpdateResult::Succeeded)
+        .collect();
+    let mut failed: Vec<_> = history
+        .iter()
+        .filter(|entry| entry.result == WindowsUpdateResult::Failed)
+        .collect();
+    let mut aborted: Vec<_> = history
+        .iter()
+        .filter(|entry| entry.result == WindowsUpdateResult::Aborted)
+        .collect();
+    for entries in [&mut succeeded, &mut failed, &mut aborted] {
+        entries.sort_by(|left, right| right.occurred_at.cmp(&left.occurred_at));
+    }
+    succeeded.truncate(10);
+
+    write!(
+        html,
+        "<section><h2>Windows Update</h2><p class=\"muted\">収集履歴: {}件 / 対象期間: {} / 最大件数: {}</p><div class=\"accordion-stack\">",
+        history.len(),
+        data.windows_updates
+            .lookback_days
+            .map_or_else(|| "全期間".into(), |days| format!("過去{days}日")),
+        data.windows_updates
+            .max_entries
+            .map_or_else(|| "制限なし".into(), |count| format!("{count}件")),
+    )
+    .unwrap();
+    render_windows_update_group(
+        html,
+        "最近成功した更新",
+        &succeeded,
+        "passed",
+        "該当する成功履歴はありません。",
+    );
+    render_windows_update_group(
+        html,
+        "失敗した更新",
+        &failed,
+        "error",
+        "失敗した更新はありません。",
+    );
+    render_windows_update_group(
+        html,
+        "中断された更新",
+        &aborted,
+        "warning",
+        "中断された更新はありません。",
+    );
+    html.push_str("</div></section>");
+}
+
+fn render_windows_update_group(
+    html: &mut String,
+    label: &str,
+    entries: &[&WindowsUpdateHistoryEntry],
+    class: &str,
+    empty_message: &str,
+) {
+    write!(
+        html,
+        "<details><summary><span class=\"{}\">{}</span>（{}件）</summary>",
+        class,
+        escape(label),
+        entries.len()
+    )
+    .unwrap();
+    if entries.is_empty() {
+        write!(html, "<p class=\"muted\">{}</p>", escape(empty_message)).unwrap();
+    } else {
+        html.push_str("<div class=\"table-wrap\"><table><thead><tr><th>実行日時</th><th>更新内容</th><th>KB</th><th>結果</th><th>HResult</th><th>実行元</th></tr></thead><tbody>");
+        for entry in entries {
+            let kb_ids = if entry.kb_ids.is_empty() {
+                "—".into()
+            } else {
+                entry.kb_ids.join(", ")
+            };
+            write!(
+                html,
+                "<tr><td class=\"nowrap\">{}</td><td class=\"update-title\">{}</td><td>{}</td><td class=\"{}\">{}</td><td><code>{} (0x{:08X})</code></td><td>{}</td></tr>",
+                escape(&format_jst(&entry.occurred_at)),
+                escape(entry.title.as_deref().unwrap_or("タイトルなし")),
+                escape(&kb_ids),
+                class,
+                windows_update_result_text(entry.result),
+                entry.hresult,
+                entry.hresult as u32,
+                escape(entry.client_application_id.as_deref().unwrap_or("—")),
+            )
+            .unwrap();
+        }
+        html.push_str("</tbody></table></div>");
+    }
+    html.push_str("</details>");
+}
+
+fn windows_update_result_text(result: WindowsUpdateResult) -> &'static str {
+    match result {
+        WindowsUpdateResult::NotStarted => "未開始",
+        WindowsUpdateResult::InProgress => "処理中",
+        WindowsUpdateResult::Succeeded => "成功",
+        WindowsUpdateResult::SucceededWithErrors => "一部エラーあり",
+        WindowsUpdateResult::Failed => "失敗",
+        WindowsUpdateResult::Aborted => "中断",
+        WindowsUpdateResult::Unknown => "不明",
+    }
+}
+
+fn format_jst(value: &str) -> String {
+    let Some(utc) = value.strip_suffix('Z') else {
+        return value.into();
+    };
+    let Some((date, time)) = utc.split_once('T') else {
+        return value.into();
+    };
+    let date_parts: Vec<_> = date.split('-').collect();
+    let time_parts: Vec<_> = time.split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return value.into();
+    }
+    let seconds_text = time_parts[2]
+        .split_once('.')
+        .map_or(time_parts[2], |(seconds, _)| seconds);
+    let (Ok(mut year), Ok(mut month), Ok(mut day), Ok(mut hour), Ok(minute), Ok(second)) = (
+        date_parts[0].parse::<u32>(),
+        date_parts[1].parse::<u32>(),
+        date_parts[2].parse::<u32>(),
+        time_parts[0].parse::<u32>(),
+        time_parts[1].parse::<u32>(),
+        seconds_text.parse::<u32>(),
+    ) else {
+        return value.into();
+    };
+    if year == 0
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > report_days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return value.into();
+    }
+    hour += 9;
+    if hour >= 24 {
+        hour -= 24;
+        day += 1;
+        if day > report_days_in_month(year, month) {
+            day = 1;
+            month += 1;
+            if month > 12 {
+                month = 1;
+                year += 1;
+            }
+        }
+    }
+    format!(
+        "{year:04}-{month:02}-{day:02} {hour:02}:{}:{} JST",
+        time_parts[1], time_parts[2]
+    )
+}
+
+fn report_days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(400) || (year.is_multiple_of(4) && !year.is_multiple_of(100)) => {
+            29
+        }
+        2 => 28,
+        _ => 31,
+    }
 }
 
 fn render_event_logs(html: &mut String, data: &Collection, diagnosis: &Diagnosis) {
@@ -709,6 +892,23 @@ mod tests {
     }
 
     #[test]
+    fn formats_utc_windows_update_times_as_jst() {
+        assert_eq!(
+            format_jst("2026-07-30T23:44:53.0000000Z"),
+            "2026-07-31 08:44:53.0000000 JST"
+        );
+        assert_eq!(
+            format_jst("2026-12-31T18:00:00Z"),
+            "2027-01-01 03:00:00 JST"
+        );
+        assert_eq!(
+            format_jst("2028-02-29T20:00:00Z"),
+            "2028-03-01 05:00:00 JST"
+        );
+        assert_eq!(format_jst("invalid"), "invalid");
+    }
+
+    #[test]
     fn formats_failure_prediction_smart_without_ambiguous_labels() {
         let smart = DiskSmart {
             disk_number: 0,
@@ -797,6 +997,57 @@ mod tests {
 
         assert_eq!(html.matches("未取得").count(), 3);
         assert!(!html.contains("取得できた範囲に高優先度イベントはありません。"));
+    }
+
+    #[test]
+    fn renders_windows_updates_in_accordions_with_requested_limits() {
+        let (mut collection, diagnosis) = loaded_inputs();
+        let mut history = (0..12)
+            .map(|index| {
+                update_entry(
+                    &format!("2026-07-{:02}T12:00:00Z", index + 1),
+                    &format!("success-{index}"),
+                    WindowsUpdateResult::Succeeded,
+                    0,
+                )
+            })
+            .collect::<Vec<_>>();
+        history.push(update_entry(
+            "2026-07-30T12:00:00Z",
+            "failed-1 <script>alert('x')</script>",
+            WindowsUpdateResult::Failed,
+            -2_145_124_330,
+        ));
+        history.push(update_entry(
+            "2026-07-29T12:00:00Z",
+            "failed-2",
+            WindowsUpdateResult::Failed,
+            -2_145_124_300,
+        ));
+        history.push(update_entry(
+            "2026-07-28T12:00:00Z",
+            "aborted-1",
+            WindowsUpdateResult::Aborted,
+            -2_145_124_341,
+        ));
+        collection.collection.windows_updates.history = Some(history);
+
+        let html = render_html(&collection, &diagnosis);
+
+        assert!(html.contains("<div class=\"accordion-stack\">"));
+        assert!(html.contains("最近成功した更新</span>（10件）"));
+        assert!(html.contains("失敗した更新</span>（2件）"));
+        assert!(html.contains("中断された更新</span>（1件）"));
+        assert!(html.contains("success-11"));
+        assert!(html.contains("success-2"));
+        assert!(!html.contains("success-1</td>"));
+        assert!(!html.contains("success-0</td>"));
+        assert!(html.contains("failed-1 &lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert"));
+        assert!(html.contains("-2145124330 (0x80240016)"));
+        assert!(html.contains("aborted-1"));
+        assert!(html.contains("2026-07-30 21:00:00 JST"));
+        assert!(!html.contains("2026-07-30T12:00:00Z"));
     }
 
     #[test]
@@ -912,6 +1163,33 @@ mod tests {
             media_type: "application/json".into(),
             size_bytes: 1,
             sha256: "0".repeat(64),
+        }
+    }
+
+    fn update_entry(
+        occurred_at: &str,
+        title: &str,
+        result: WindowsUpdateResult,
+        hresult: i64,
+    ) -> WindowsUpdateHistoryEntry {
+        WindowsUpdateHistoryEntry {
+            occurred_at: occurred_at.into(),
+            title: Some(title.into()),
+            kb_ids: vec!["KB5060001".into()],
+            operation: pcdiag_core::WindowsUpdateOperation::Installation,
+            operation_code: 1,
+            result,
+            result_code: match result {
+                WindowsUpdateResult::Succeeded => 2,
+                WindowsUpdateResult::Failed => 4,
+                WindowsUpdateResult::Aborted => 5,
+                _ => 99,
+            },
+            hresult,
+            update_id: Some(format!("id-{title}")),
+            revision_number: Some(1),
+            support_url: None,
+            client_application_id: Some("UpdateOrchestrator".into()),
         }
     }
 

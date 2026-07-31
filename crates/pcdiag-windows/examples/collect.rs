@@ -1,8 +1,8 @@
-use pcdiag_windows::collect_all;
+use pcdiag_windows::{WindowsUpdateCollectionOptions, collect_all};
 use serde_json::json;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let result = collect_all(30);
+    let result = collect_all(30, WindowsUpdateCollectionOptions::default());
     let output = json!({
         "collection": result.collection,
         "status": result.status,

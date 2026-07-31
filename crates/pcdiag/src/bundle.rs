@@ -8,12 +8,15 @@ use pcdiag_core::{
     ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, CollectorStatus, ToolInfo,
     display_id, sha256_hex,
 };
-use pcdiag_windows::collect_all;
+use pcdiag_windows::{WindowsUpdateCollectionOptions, collect_all};
 
 const MANIFEST_SCHEMA_VERSION: &str = "1.0";
 const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
 
-pub fn collect_to_bundle(output_root: &Path) -> Result<PathBuf, BundleError> {
+pub fn collect_to_bundle(
+    output_root: &Path,
+    windows_update_options: WindowsUpdateCollectionOptions,
+) -> Result<PathBuf, BundleError> {
     let started = Instant::now();
     let started_at = platform::utc_timestamp()?;
     let observed_utc_offset_minutes = platform::utc_offset_minutes()?;
@@ -33,7 +36,7 @@ pub fn collect_to_bundle(output_root: &Path) -> Result<PathBuf, BundleError> {
             continue;
         }
         fs::create_dir(&incomplete_directory)?;
-        let result = collect_all(configured_event_log_days()?);
+        let result = collect_all(configured_event_log_days()?, windows_update_options);
         result.collection.validate_with_status(&result.status)?;
         let completed_at = platform::utc_timestamp()?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -361,7 +364,7 @@ mod tests {
         let incomplete = root.join("session.incomplete");
         let final_directory = root.join("session");
         fs::create_dir(&incomplete).unwrap();
-        let result = collect_all(30);
+        let result = collect_all(30, WindowsUpdateCollectionOptions::default());
         let written = write_bundle(
             &incomplete,
             &final_directory,

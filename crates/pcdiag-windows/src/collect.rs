@@ -1,9 +1,10 @@
 use pcdiag_core::{Collection, CollectionStatus, StorageCollection};
 
 use crate::{
-    collect_clock, collect_cpu, collect_devices, collect_event_logs, collect_firmware,
-    collect_gpus, collect_memory, collect_partitions, collect_physical_disks, collect_smart,
-    collect_volumes, collect_windows_info,
+    WindowsUpdateCollectionOptions, collect_clock, collect_cpu, collect_devices,
+    collect_event_logs, collect_firmware, collect_gpus, collect_memory, collect_partitions,
+    collect_physical_disks, collect_smart, collect_volumes, collect_windows_info,
+    collect_windows_updates,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,8 +13,12 @@ pub struct CompleteCollectionResult {
     pub status: CollectionStatus,
 }
 
-pub fn collect_all(event_log_days: u32) -> CompleteCollectionResult {
+pub fn collect_all(
+    event_log_days: u32,
+    windows_update_options: WindowsUpdateCollectionOptions,
+) -> CompleteCollectionResult {
     let windows = collect_windows_info();
+    let windows_updates = collect_windows_updates(windows_update_options);
     let clock = collect_clock();
     let cpu = collect_cpu();
     let firmware = collect_firmware();
@@ -29,6 +34,7 @@ pub fn collect_all(event_log_days: u32) -> CompleteCollectionResult {
     CompleteCollectionResult {
         collection: Collection {
             windows: windows.collection,
+            windows_updates: windows_updates.collection,
             clock: clock.collection,
             cpu: cpu.collection,
             firmware: firmware.collection,
@@ -46,6 +52,7 @@ pub fn collect_all(event_log_days: u32) -> CompleteCollectionResult {
         status: CollectionStatus {
             collectors: vec![
                 windows.status,
+                windows_updates.status,
                 clock.status,
                 cpu.status,
                 firmware.status,

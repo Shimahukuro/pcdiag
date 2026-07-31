@@ -7,6 +7,7 @@ mod gpu;
 mod memory;
 mod physical_disk;
 mod windows;
+mod windows_update;
 
 pub use cpu::{CpuCollection, CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology};
 pub use event_log::{EventLogCollection, EventLogEntry, EventLogLevel};
@@ -18,6 +19,9 @@ pub use physical_disk::{
     StorageCollection, StorageVolume, VolumeExtent,
 };
 pub use windows::{BootMode, SystemArchitecture, WindowsCollection};
+pub use windows_update::{
+    WindowsUpdateCollection, WindowsUpdateHistoryEntry, WindowsUpdateOperation, WindowsUpdateResult,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +32,7 @@ use self::memory::deserialize_required_nullable;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collection {
     pub windows: WindowsCollection,
+    pub windows_updates: WindowsUpdateCollection,
     pub clock: ClockCollection,
     pub cpu: CpuCollection,
     pub firmware: FirmwareCollection,

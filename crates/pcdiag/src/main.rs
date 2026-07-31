@@ -2,6 +2,7 @@ mod bundle;
 mod diagnose;
 mod report;
 
+use pcdiag_windows::WindowsUpdateCollectionOptions;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -21,7 +22,10 @@ fn main() -> ExitCode {
         eprintln!("{SENSITIVE_DATA_NOTICE}");
     }
     match command {
-        Command::DefaultPipeline { output } => match run_default_pipeline(&output) {
+        Command::DefaultPipeline {
+            output,
+            windows_updates,
+        } => match run_default_pipeline(&output, windows_updates) {
             Ok(path) => {
                 println!("{}", path.display());
                 ExitCode::SUCCESS
@@ -31,7 +35,10 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        Command::Collect { output } => match bundle::collect_to_bundle(&output) {
+        Command::Collect {
+            output,
+            windows_updates,
+        } => match bundle::collect_to_bundle(&output, windows_updates) {
             Ok(path) => {
                 println!("{}", path.display());
                 ExitCode::SUCCESS
@@ -74,10 +81,20 @@ pcdiag: 注意: 保存先、共有範囲、保管期間、廃棄は担当者が�
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
-    DefaultPipeline { output: PathBuf },
-    Collect { output: PathBuf },
-    Diagnose { output: PathBuf },
-    Report { output: PathBuf },
+    DefaultPipeline {
+        output: PathBuf,
+        windows_updates: WindowsUpdateCollectionOptions,
+    },
+    Collect {
+        output: PathBuf,
+        windows_updates: WindowsUpdateCollectionOptions,
+    },
+    Diagnose {
+        output: PathBuf,
+    },
+    Report {
+        output: PathBuf,
+    },
     Help,
 }
 
@@ -88,30 +105,24 @@ impl Command {
 }
 
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
-    let mut arguments = arguments.into_iter();
-    let Some(command) = arguments.next() else {
+    let arguments: Vec<_> = arguments.into_iter().collect();
+    let Some(command) = arguments.first() else {
         return Ok(Command::DefaultPipeline {
             output: PathBuf::from("."),
+            windows_updates: WindowsUpdateCollectionOptions::default(),
         });
     };
     if command == "--help" || command == "-h" {
-        if arguments.next().is_some() {
+        if arguments.len() != 1 {
             return Err("--helpに追加の引数は指定できません".into());
         }
         return Ok(Command::Help);
     }
-    if command == "--output" {
-        let Some(output) = arguments.next() else {
-            return Err("--outputの値が指定されていません".into());
-        };
-        if output.is_empty() {
-            return Err("--outputに空のパスは指定できません".into());
-        }
-        if arguments.next().is_some() {
-            return Err("余分な引数が指定されています".into());
-        }
+    if command.to_string_lossy().starts_with("--") {
+        let (output, windows_updates) = parse_collection_options(&arguments, false)?;
         return Ok(Command::DefaultPipeline {
-            output: PathBuf::from(output),
+            output,
+            windows_updates,
         });
     }
     if command != "collect" && command != "diagnose" && command != "report" {
@@ -120,7 +131,14 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
             command.to_string_lossy()
         ));
     }
-    let Some(option) = arguments.next() else {
+    if command == "collect" {
+        let (output, windows_updates) = parse_collection_options(&arguments[1..], true)?;
+        return Ok(Command::Collect {
+            output,
+            windows_updates,
+        });
+    }
+    let Some(option) = arguments.get(1) else {
         return Err(format!(
             "{}には--output <出力先ディレクトリ>が必要です",
             command.to_string_lossy()
@@ -133,36 +151,114 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
             option.to_string_lossy()
         ));
     }
-    let Some(output) = arguments.next() else {
+    let Some(output) = arguments.get(2) else {
         return Err("--outputの値が指定されていません".into());
     };
     if output.is_empty() {
         return Err("--outputに空のパスは指定できません".into());
     }
-    if arguments.next().is_some() {
+    if arguments.len() != 3 {
         return Err("余分な引数が指定されています".into());
     }
     let output = PathBuf::from(output);
     Ok(match command.to_string_lossy().as_ref() {
-        "collect" => Command::Collect { output },
         "diagnose" => Command::Diagnose { output },
         "report" => Command::Report { output },
         _ => unreachable!(),
     })
 }
 
+fn parse_collection_options(
+    arguments: &[OsString],
+    output_required: bool,
+) -> Result<(PathBuf, WindowsUpdateCollectionOptions), String> {
+    let mut output = None;
+    let mut options = WindowsUpdateCollectionOptions::default();
+    let mut index = 0;
+    while index < arguments.len() {
+        let option = &arguments[index];
+        if option == "--windows-update-all" {
+            options.lookback_days = None;
+            options.max_entries = None;
+            index += 1;
+            continue;
+        }
+        let Some(value) = arguments.get(index + 1) else {
+            return Err(format!(
+                "{}の値が指定されていません",
+                option.to_string_lossy()
+            ));
+        };
+        if value.is_empty() {
+            return Err(format!(
+                "{}に空の値は指定できません",
+                option.to_string_lossy()
+            ));
+        }
+        match option.to_string_lossy().as_ref() {
+            "--output" => {
+                if output.replace(PathBuf::from(value)).is_some() {
+                    return Err("--outputは複数回指定できません".into());
+                }
+            }
+            "--windows-update-days" => {
+                options.lookback_days = parse_optional_limit(value, 3_650, option)?;
+            }
+            "--windows-update-max-entries" => {
+                options.max_entries = parse_optional_limit(value, 100_000, option)?;
+            }
+            _ => {
+                return Err(format!(
+                    "未対応のオプションです: {}",
+                    option.to_string_lossy()
+                ));
+            }
+        }
+        index += 2;
+    }
+    if output_required && output.is_none() {
+        return Err("collectには--output <出力先ディレクトリ>が必要です".into());
+    }
+    Ok((output.unwrap_or_else(|| PathBuf::from(".")), options))
+}
+
+fn parse_optional_limit(
+    value: &OsString,
+    maximum: u32,
+    option: &OsString,
+) -> Result<Option<u32>, String> {
+    if value == "all" {
+        return Ok(None);
+    }
+    value
+        .to_str()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| (1..=maximum).contains(value))
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "{}には1から{}の整数またはallを指定してください",
+                option.to_string_lossy(),
+                maximum
+            )
+        })
+}
+
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag\n  pcdiag --output <出力先ディレクトリ>\n  pcdiag collect --output <出力先ディレクトリ>\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag [収集オプション]\n  pcdiag collect --output <出力先ディレクトリ> [収集オプション]\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\n収集オプション:\n  --output <パス>                         出力先ディレクトリ\n  --windows-update-days <日数|all>       Windows Update履歴の取得期間（既定: 180日）\n  --windows-update-max-entries <件数|all> 最大取得件数（既定: 1000件）\n  --windows-update-all                   Windows Updateの全履歴を取得\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
         env!("CARGO_PKG_VERSION")
     );
 }
 
-fn run_default_pipeline(output_root: &Path) -> Result<PathBuf, String> {
+fn run_default_pipeline(
+    output_root: &Path,
+    windows_updates: WindowsUpdateCollectionOptions,
+) -> Result<PathBuf, String> {
     run_pipeline(
         output_root,
         |output| {
-            bundle::collect_to_bundle(output)
+            bundle::collect_to_bundle(output, windows_updates)
                 .map_err(|error| format!("collectに失敗しました: {error}"))
         },
         |session| {
@@ -208,7 +304,8 @@ mod tests {
         assert_eq!(
             parse_args(["collect".into(), "--output".into(), "results".into()]).unwrap(),
             Command::Collect {
-                output: PathBuf::from("results")
+                output: PathBuf::from("results"),
+                windows_updates: WindowsUpdateCollectionOptions::default(),
             }
         );
     }
@@ -218,9 +315,11 @@ mod tests {
         for command in [
             Command::DefaultPipeline {
                 output: PathBuf::from("."),
+                windows_updates: WindowsUpdateCollectionOptions::default(),
             },
             Command::Collect {
                 output: PathBuf::from("results"),
+                windows_updates: WindowsUpdateCollectionOptions::default(),
             },
             Command::Diagnose {
                 output: PathBuf::from("session"),
@@ -247,7 +346,8 @@ mod tests {
         assert_eq!(
             parse_args(Vec::<OsString>::new()).unwrap(),
             Command::DefaultPipeline {
-                output: PathBuf::from(".")
+                output: PathBuf::from("."),
+                windows_updates: WindowsUpdateCollectionOptions::default(),
             }
         );
     }
@@ -272,10 +372,60 @@ mod tests {
         assert_eq!(
             parse_args(["--output".into(), "D:\\pcdiag-results".into()]).unwrap(),
             Command::DefaultPipeline {
-                output: PathBuf::from("D:\\pcdiag-results")
+                output: PathBuf::from("D:\\pcdiag-results"),
+                windows_updates: WindowsUpdateCollectionOptions::default(),
             }
         );
         assert!(parse_args(["--output".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_windows_update_collection_options() {
+        assert_eq!(
+            parse_args([
+                "collect".into(),
+                "--output".into(),
+                "results".into(),
+                "--windows-update-days".into(),
+                "90".into(),
+                "--windows-update-max-entries".into(),
+                "500".into(),
+            ])
+            .unwrap(),
+            Command::Collect {
+                output: PathBuf::from("results"),
+                windows_updates: WindowsUpdateCollectionOptions {
+                    lookback_days: Some(90),
+                    max_entries: Some(500),
+                },
+            }
+        );
+        assert_eq!(
+            parse_args([
+                "collect".into(),
+                "--output".into(),
+                "results".into(),
+                "--windows-update-all".into(),
+            ])
+            .unwrap(),
+            Command::Collect {
+                output: PathBuf::from("results"),
+                windows_updates: WindowsUpdateCollectionOptions {
+                    lookback_days: None,
+                    max_entries: None,
+                },
+            }
+        );
+        assert!(
+            parse_args([
+                "collect".into(),
+                "--output".into(),
+                "results".into(),
+                "--windows-update-days".into(),
+                "0".into(),
+            ])
+            .is_err()
+        );
     }
 
     #[test]

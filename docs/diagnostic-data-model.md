@@ -58,6 +58,11 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
 ```json
 {
   "windows": {},
+  "windows_updates": {
+    "lookback_days": 180,
+    "max_entries": 1000,
+    "history": []
+  },
   "clock": {},
   "cpu": {
     "packages": []
@@ -76,6 +81,41 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
 初期スキーマで定義されたカテゴリは、収集に失敗した場合も省略しない。オブジェクト内の値を`null`とし、理由を`status.json`へ記録する。
 
 配列は正常に列挙した結果が0件なら空配列とする。GPUの列挙自体に失敗または未実行の場合は`gpus`を`null`とし、理由を`status.json`へ記録する。
+
+### Windows Update履歴
+
+`windows_updates.history`には、Windows Update Agentが保持する更新履歴を新しい順で保存する。これは現在インストール済みの更新一覧ではなく、インストール、アンインストール、失敗、中断を含む操作履歴である。
+
+```json
+{
+  "windows_updates": {
+    "lookback_days": 180,
+    "max_entries": 1000,
+    "history": [
+      {
+        "occurred_at": "2026-07-17T00:02:03.000Z",
+        "title": "2026-07 Cumulative Update (KB5060001)",
+        "kb_ids": ["KB5060001"],
+        "operation": "installation",
+        "operation_code": 1,
+        "result": "succeeded",
+        "result_code": 2,
+        "hresult": 0,
+        "update_id": "cdb1f3c1-7e92-4a48-8416-b72a09a3fd55",
+        "revision_number": 1,
+        "support_url": "https://support.microsoft.com/help/5060001",
+        "client_application_id": "UpdateOrchestrator"
+      }
+    ]
+  }
+}
+```
+
+- `lookback_days`と`max_entries`の`null`は、それぞれ期間または件数を制限しないことを表す。
+- 履歴0件は空配列とする。列挙失敗時だけ`history`を`null`とし、`status.json`へ理由を記録する。
+- `operation`と`result`は安定した列挙値へ正規化し、未認識の値は`unknown`とする。元の数値は`operation_code`と`result_code`に保持する。
+- KB番号はタイトルから抽出できた値を大文字で保存し、取得できない場合は空配列とする。
+- 期間による切り捨ては`windows_update_history_truncated_by_date`、件数による切り捨ては`windows_update_history_truncated_by_count`として`status.json`へ記録する。
 
 ## status.json
 
