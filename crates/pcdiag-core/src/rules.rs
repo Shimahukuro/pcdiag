@@ -22,7 +22,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     Diagnosis {
         rule_set: RuleSetInfo {
             name: "pcdiag_builtin".into(),
-            version: "0.7.0".into(),
+            version: "0.8.0".into(),
         },
         summary,
         evaluations,
@@ -130,6 +130,11 @@ fn aggregated_event_log_evaluation(
         ),
         _ => unreachable!("only classified event kinds are grouped"),
     };
+    let occurrence = if kind == "unexpected_shutdown" {
+        format!("推定{}回", correlated_unexpected_shutdown_count(events, 60))
+    } else {
+        format!("{}件", events.len())
+    };
     RuleEvaluation {
         rule_id: format!("event_log.{field}.{kind}"),
         rule_version: "1.0.0".into(),
@@ -137,11 +142,8 @@ fn aggregated_event_log_evaluation(
         status: RuleEvaluationStatus::Triggered,
         severity: Some(severity),
         summary: format!(
-            "{label}を過去{lookback_days}日間に{}件検出しました。最新: {}: {} (event {})",
-            events.len(),
-            latest.occurred_at,
-            latest.summary,
-            latest.event_id
+            "{label}を過去{lookback_days}日間に{occurrence}検出しました。最新: {}: {} (event {})",
+            latest.occurred_at, latest.summary, latest.event_id
         ),
         evidence: vec![Evidence::Collected {
             path: format!("/event_logs/{field}/{index}"),
@@ -153,6 +155,64 @@ fn aggregated_event_log_evaluation(
             code: recommendation.into(),
         }),
     }
+}
+
+fn correlated_unexpected_shutdown_count(
+    events: &[(usize, &EventLogEntry)],
+    correlation_seconds: i64,
+) -> usize {
+    let mut event_6008: Vec<_> = events
+        .iter()
+        .filter(|(_, event)| event.event_id == 6008)
+        .filter_map(|(_, event)| utc_seconds(&event.occurred_at).map(|time| (time, false)))
+        .collect();
+    let mut paired = 0;
+    for (_, event) in events.iter().filter(|(_, event)| event.event_id == 41) {
+        let Some(time) = utc_seconds(&event.occurred_at) else {
+            continue;
+        };
+        if let Some((_, used)) = event_6008
+            .iter_mut()
+            .filter(|(candidate, used)| !*used && (time - *candidate).abs() <= correlation_seconds)
+            .min_by_key(|(candidate, _)| (time - *candidate).abs())
+        {
+            *used = true;
+            paired += 1;
+        }
+    }
+    events.len().saturating_sub(paired)
+}
+
+fn utc_seconds(value: &str) -> Option<i64> {
+    let (date, time) = value.strip_suffix('Z')?.split_once('T')?;
+    let mut date = date.split('-').map(str::parse::<i64>);
+    let (year, month, day) = (date.next()?.ok()?, date.next()?.ok()?, date.next()?.ok()?);
+    if date.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    let mut time = time.split(':');
+    let hour = time.next()?.parse::<i64>().ok()?;
+    let minute = time.next()?.parse::<i64>().ok()?;
+    let second = time.next()?.split('.').next()?.parse::<i64>().ok()?;
+    if time.next().is_some()
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&minute)
+        || !(0..=60).contains(&second)
+    {
+        return None;
+    }
+    let adjusted_year = year - i64::from(month <= 2);
+    let era = if adjusted_year >= 0 {
+        adjusted_year
+    } else {
+        adjusted_year - 399
+    } / 400;
+    let year_of_era = adjusted_year - era * 400;
+    let adjusted_month = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days_since_epoch = era * 146_097 + day_of_era - 719_468;
+    Some(days_since_epoch * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
 fn evaluate_storage(collection: &Collection) -> Vec<RuleEvaluation> {
@@ -1421,7 +1481,7 @@ mod tests {
         let collection = gpu_collection();
         let diagnosis = diagnose_collection(&collection);
 
-        assert_eq!(diagnosis.rule_set.version, "0.7.0");
+        assert_eq!(diagnosis.rule_set.version, "0.8.0");
         assert!(diagnosis.evaluations[1..5].iter().all(|evaluation| {
             evaluation.category == "gpu" && evaluation.status == RuleEvaluationStatus::Passed
         }));
@@ -1708,5 +1768,42 @@ mod tests {
         assert!(event_findings[0].summary.contains("latest crash"));
         assert_eq!(event_findings[0].evidence.len(), 1);
         diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn correlates_shutdown_event_pairs_into_estimated_occurrences() {
+        let mut collection = collection();
+        collection.event_logs.system = Some(vec![
+            shutdown_event(41, "2026-07-30T23:59:50Z"),
+            shutdown_event(6008, "2026-07-31T00:00:03Z"),
+            shutdown_event(41, "2026-07-31T02:00:00Z"),
+            shutdown_event(6008, "2026-07-31T04:00:00Z"),
+        ]);
+
+        let diagnosis = diagnose_collection(&collection);
+        let finding = diagnosis
+            .evaluations
+            .iter()
+            .find(|evaluation| evaluation.rule_id == "event_log.system.unexpected_shutdown")
+            .unwrap();
+
+        assert!(finding.summary.contains("推定3回"));
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    fn shutdown_event(event_id: u32, occurred_at: &str) -> EventLogEntry {
+        EventLogEntry {
+            occurred_at: occurred_at.into(),
+            log_name: "System".into(),
+            provider: if event_id == 41 {
+                "Microsoft-Windows-Kernel-Power"
+            } else {
+                "EventLog"
+            }
+            .into(),
+            event_id,
+            level: crate::EventLogLevel::Critical,
+            summary: format!("shutdown event {event_id}"),
+        }
     }
 }
