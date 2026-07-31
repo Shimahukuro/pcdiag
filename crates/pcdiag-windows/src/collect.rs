@@ -1,9 +1,9 @@
 use pcdiag_core::{Collection, CollectionStatus, StorageCollection};
 
 use crate::{
-    collect_clock, collect_cpu, collect_devices, collect_firmware, collect_gpus, collect_memory,
-    collect_partitions, collect_physical_disks, collect_smart, collect_volumes,
-    collect_windows_info,
+    collect_clock, collect_cpu, collect_devices, collect_event_logs, collect_firmware,
+    collect_gpus, collect_memory, collect_partitions, collect_physical_disks, collect_smart,
+    collect_volumes, collect_windows_info,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -12,7 +12,7 @@ pub struct CompleteCollectionResult {
     pub status: CollectionStatus,
 }
 
-pub fn collect_all() -> CompleteCollectionResult {
+pub fn collect_all(event_log_days: u32) -> CompleteCollectionResult {
     let windows = collect_windows_info();
     let clock = collect_clock();
     let cpu = collect_cpu();
@@ -20,6 +20,7 @@ pub fn collect_all() -> CompleteCollectionResult {
     let memory = collect_memory();
     let gpus = collect_gpus();
     let devices = collect_devices();
+    let event_logs = collect_event_logs(event_log_days);
     let physical_disks = collect_physical_disks();
     let partitions = collect_partitions();
     let volumes = collect_volumes();
@@ -34,6 +35,7 @@ pub fn collect_all() -> CompleteCollectionResult {
             memory: memory.collection,
             gpus: gpus.collection,
             devices: devices.collection,
+            event_logs: event_logs.collection,
             storage: StorageCollection {
                 disks: physical_disks.collection,
                 partitions: partitions.collection,
@@ -50,6 +52,7 @@ pub fn collect_all() -> CompleteCollectionResult {
                 memory.status,
                 gpus.status,
                 devices.status,
+                event_logs.status,
                 physical_disks.status,
                 partitions.status,
                 volumes.status,

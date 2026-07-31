@@ -10,6 +10,7 @@ pub enum CollectorName {
     Memory,
     Gpu,
     Devices,
+    EventLogs,
     PhysicalDisks,
     Partitions,
     Volumes,

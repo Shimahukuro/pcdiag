@@ -170,6 +170,7 @@ fn render_html(
         html.push_str("<section class=\"finding warning\"><h2>情報収集に関する注意</h2><p>一部の情報を取得できなかったため、このレポートには未評価の情報が含まれる可能性があります。診断結果は、取得できた情報と現在の診断規則の範囲に基づきます。</p></section>");
     }
     render_findings(&mut html, result);
+    render_event_logs(&mut html, data);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
     render_storage(&mut html, data);
@@ -179,6 +180,75 @@ fn render_html(
     html.push_str("<footer class=\"artifact-notice\"><h2>成果物の取り扱いに関する注意</h2><p>この診断成果物には、診断に必要な端末情報、アカウント識別情報、ネットワーク情報、ファイルパス、イベント内容などが含まれる場合があります。保存先、共有範囲、保管期間、廃棄は担当者が管理してください。pcdiagは成果物を自動削除しません。</p></footer>");
     html.push_str("</main></body></html>\n");
     html
+}
+
+fn render_event_logs(html: &mut String, data: &Collection) {
+    html.push_str("<section><h2>Windowsイベントログ</h2>");
+    write!(
+        html,
+        "<p class=\"muted\">収集期間: 過去{}日（各ログ最大1000件）</p>",
+        data.event_logs.lookback_days
+    )
+    .unwrap();
+    html.push_str("<table><thead><tr><th>重大度</th><th>発生時刻</th><th>概要</th><th>ログ名</th><th>対処の目安</th></tr></thead><tbody>");
+    let mut count = 0;
+    for events in [
+        data.event_logs.system.as_deref(),
+        data.event_logs.application.as_deref(),
+        data.event_logs.security.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for event in events {
+            count += 1;
+            let (severity, recommendation) =
+                event_log_display(event.log_name.as_str(), event.event_id, event.level);
+            write!(
+                html,
+                "<tr><td class=\"{}\">{}</td><td>{}</td><td>{} <span class=\"muted\">({} / {})</span></td><td>{}</td><td>{}</td></tr>",
+                severity_class(Some(severity)),
+                severity_text(severity),
+                escape(&event.occurred_at),
+                escape(&event.summary),
+                escape(&event.provider),
+                event.event_id,
+                escape(&event.log_name),
+                recommendation,
+            )
+            .unwrap();
+        }
+    }
+    if count == 0 {
+        html.push_str("<tr><td colspan=\"5\" class=\"passed\">取得できた範囲に高優先度イベントはありません。</td></tr>");
+    }
+    html.push_str("</tbody></table></section>");
+}
+
+fn event_log_display(
+    log_name: &str,
+    event_id: u32,
+    level: pcdiag_core::EventLogLevel,
+) -> (Severity, &'static str) {
+    use pcdiag_core::EventLogLevel;
+    let severity = match (log_name, event_id, level) {
+        ("Security", 1102, _) | ("System", 41 | 6008, _) => Severity::Critical,
+        ("Security", 4719, _) => Severity::Error,
+        (_, _, EventLogLevel::Critical) => Severity::Critical,
+        (_, _, EventLogLevel::Error) => Severity::Error,
+        _ => Severity::Warning,
+    };
+    let recommendation = match (log_name, event_id) {
+        ("Security", 1102) => "監査ログ消去の実施者と経緯を直ちに確認してください。",
+        ("Security", 4625) => "失敗したログオンの対象・発生元・頻度を確認してください。",
+        ("Security", 4719) => "監査ポリシー変更が承認済みか確認してください。",
+        ("System", 41 | 6008) => "電源、温度、ドライバー、直前の操作を確認してください。",
+        ("Application", 1000 | 1001 | 1002) => {
+            "障害アプリケーションとモジュールを確認し、更新または修復してください。"
+        }
+        _ => "イベントの詳細と同時刻の関連イベントを確認してください。",
+    };
+    (severity, recommendation)
 }
 
 fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
@@ -663,6 +733,28 @@ mod tests {
         assert!(html.contains("pcdiagは成果物を自動削除しません。"));
         assert!(html.contains(".artifact-notice{"));
         assert!(html.contains("section,.artifact-notice{break-inside:avoid"));
+    }
+
+    #[test]
+    fn renders_event_details_and_escapes_sensitive_text() {
+        let (mut collection, mut diagnosis) = loaded_inputs();
+        collection.collection.event_logs.application = Some(vec![pcdiag_core::EventLogEntry {
+            occurred_at: "2026-07-30T12:00:00Z".into(),
+            log_name: "Application".into(),
+            provider: "Application Error".into(),
+            event_id: 1000,
+            level: pcdiag_core::EventLogLevel::Error,
+            summary: "<script>alert('x')</script>".into(),
+        }]);
+        diagnosis.diagnosis = diagnose_collection(&collection.collection);
+        let html = render_html(&collection, &diagnosis);
+
+        assert!(html.contains("Windowsイベントログ"));
+        assert!(html.contains("2026-07-30T12:00:00Z"));
+        assert!(html.contains("Application"));
+        assert!(html.contains("障害アプリケーションとモジュール"));
+        assert!(html.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
+        assert!(!html.contains("<script>alert"));
     }
 
     #[test]

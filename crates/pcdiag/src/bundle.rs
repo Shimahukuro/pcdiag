@@ -33,7 +33,7 @@ pub fn collect_to_bundle(output_root: &Path) -> Result<PathBuf, BundleError> {
             continue;
         }
         fs::create_dir(&incomplete_directory)?;
-        let result = collect_all();
+        let result = collect_all(configured_event_log_days()?);
         result.collection.validate_with_status(&result.status)?;
         let completed_at = platform::utc_timestamp()?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -52,6 +52,22 @@ pub fn collect_to_bundle(output_root: &Path) -> Result<PathBuf, BundleError> {
         );
     }
     Err(BundleError::Collision)
+}
+
+fn configured_event_log_days() -> Result<u32, BundleError> {
+    let Some(value) = std::env::var_os("PCDIAG_EVENT_LOG_DAYS") else {
+        return Ok(30);
+    };
+    let value = value
+        .to_str()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|days| (1..=3_650).contains(days))
+        .ok_or_else(|| {
+            BundleError::Configuration(
+                "PCDIAG_EVENT_LOG_DAYSには1から3650の日数を指定してください".into(),
+            )
+        })?;
+    Ok(value)
 }
 
 struct ManifestTiming {
@@ -150,6 +166,7 @@ pub enum BundleError {
     CollectionValidation(pcdiag_core::ValidationErrors),
     ManifestValidation(pcdiag_core::ManifestValidationErrors),
     Platform(String),
+    Configuration(String),
     Collision,
 }
 
@@ -161,6 +178,7 @@ impl std::fmt::Display for BundleError {
             Self::CollectionValidation(error) => write!(formatter, "収集結果が不正です: {error}"),
             Self::ManifestValidation(error) => write!(formatter, "マニフェストが不正です: {error}"),
             Self::Platform(message) => formatter.write_str(message),
+            Self::Configuration(message) => formatter.write_str(message),
             Self::Collision => {
                 formatter.write_str("一意なセッションディレクトリを作成できませんでした")
             }
@@ -343,7 +361,7 @@ mod tests {
         let incomplete = root.join("session.incomplete");
         let final_directory = root.join("session");
         fs::create_dir(&incomplete).unwrap();
-        let result = collect_all();
+        let result = collect_all(30);
         let written = write_bundle(
             &incomplete,
             &final_directory,

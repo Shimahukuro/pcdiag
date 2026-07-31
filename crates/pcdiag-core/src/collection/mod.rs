@@ -1,6 +1,7 @@
 mod clock;
 mod cpu;
 mod device;
+mod event_log;
 mod firmware;
 mod gpu;
 mod memory;
@@ -8,6 +9,7 @@ mod physical_disk;
 mod windows;
 
 pub use cpu::{CpuCollection, CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology};
+pub use event_log::{EventLogCollection, EventLogEntry, EventLogLevel};
 pub use firmware::{FirmwareCollection, FirmwareInterfaceType, FirmwareOperationalStatus};
 pub use gpu::{Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers};
 pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
@@ -34,6 +36,7 @@ pub struct Collection {
     pub gpus: Option<Vec<Gpu>>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub devices: Option<Vec<ConnectedDevice>>,
+    pub event_logs: EventLogCollection,
     pub storage: StorageCollection,
 }
 pub use clock::{ClockCollection, HardwareClock, WindowsServiceState};

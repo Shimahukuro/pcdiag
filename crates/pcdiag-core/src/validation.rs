@@ -509,6 +509,45 @@ impl Collection {
             self.memory.virtual_memory.available_bytes,
             self.memory.virtual_memory.total_bytes,
         );
+        if !(1..=3_650).contains(&self.event_logs.lookback_days) {
+            push_error(
+                &mut errors,
+                "/event_logs/lookback_days",
+                "must be between 1 and 3650",
+            );
+        }
+        for (field, expected_log, events) in [
+            ("system", "System", self.event_logs.system.as_deref()),
+            (
+                "application",
+                "Application",
+                self.event_logs.application.as_deref(),
+            ),
+            ("security", "Security", self.event_logs.security.as_deref()),
+        ] {
+            if let Some(events) = events {
+                for (index, event) in events.iter().enumerate() {
+                    let base = format!("/event_logs/{field}/{index}");
+                    if event.log_name != expected_log {
+                        push_error(
+                            &mut errors,
+                            format!("{base}/log_name"),
+                            format!("must be {expected_log}"),
+                        );
+                    }
+                    if !event.occurred_at.contains('T') {
+                        push_error(
+                            &mut errors,
+                            format!("{base}/occurred_at"),
+                            "must be an ISO date-time",
+                        );
+                    }
+                    if event.provider.is_empty() || event.summary.is_empty() {
+                        push_error(&mut errors, base, "provider and summary must not be empty");
+                    }
+                }
+            }
+        }
 
         finish(errors)
     }
@@ -656,6 +695,43 @@ impl Collection {
             false,
             &mut errors,
         );
+        let event_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::EventLogs)
+            .collect();
+        if event_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one event log collector result",
+            );
+        } else if let Some(collector) = event_collectors.first() {
+            let missing = [
+                ("/event_logs/system", self.event_logs.system.is_none()),
+                (
+                    "/event_logs/application",
+                    self.event_logs.application.is_none(),
+                ),
+                ("/event_logs/security", self.event_logs.security.is_none()),
+            ];
+            if collector.status == CollectorStatus::Success
+                && (missing.iter().any(|(_, value)| *value)
+                    || !collector.fields.is_empty()
+                    || !collector.messages.is_empty())
+            {
+                push_error(
+                    &mut errors,
+                    "/collectors/event_logs/status",
+                    "successful event log collector must not contain failures",
+                );
+            }
+            for (path, is_missing) in missing {
+                if is_missing && !collector.fields.iter().any(|field| field.path == path) {
+                    push_error(&mut errors, path, "missing log requires a field result");
+                }
+            }
+        }
         finish(errors)
     }
 }
@@ -1903,6 +1979,7 @@ mod tests {
             },
             gpus: Some(vec![]),
             devices: Some(vec![]),
+            event_logs: Default::default(),
             storage: StorageCollection {
                 disks: Some(vec![]),
                 partitions: Some(vec![]),
@@ -1935,6 +2012,7 @@ mod tests {
             },
             gpus: Some(vec![]),
             devices: Some(vec![]),
+            event_logs: Default::default(),
             storage: StorageCollection {
                 disks: Some(vec![]),
                 partitions: Some(vec![]),

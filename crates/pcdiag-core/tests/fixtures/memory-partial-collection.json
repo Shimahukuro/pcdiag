@@ -20,5 +20,11 @@
   },
   "gpus": [],
   "devices": [],
+  "event_logs": {
+    "lookback_days": 30,
+    "system": [],
+    "application": [],
+    "security": []
+  },
   "storage": {"disks": [], "partitions": [], "volumes": [], "smart": []}
 }

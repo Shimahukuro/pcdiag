@@ -38,6 +38,7 @@ name = "pcdiag-windows"
 version = "0.1.0"
 dependencies = [
  "pcdiag-core",
+ "serde",
  "serde_json",
  "windows",
  "windows-sys",

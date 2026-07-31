@@ -4,8 +4,9 @@ use serde_json::{Value, json};
 
 use crate::{
     Collection, ConnectedDevice, Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts,
-    EvaluationReason, Evidence, FindingCounts, Gpu, GpuAdapterType, MeasurementUnit,
-    Recommendation, RuleEvaluation, RuleEvaluationStatus, RuleSetInfo, Severity, SmartProtocol,
+    EvaluationReason, EventLogEntry, EventLogLevel, Evidence, FindingCounts, Gpu, GpuAdapterType,
+    MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus, RuleSetInfo, Severity,
+    SmartProtocol,
 };
 
 const MEMORY_AVAILABLE_THRESHOLD_PERCENT: f64 = 10.0;
@@ -16,6 +17,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     let mut evaluations = vec![evaluate_memory_available_ratio(collection)];
     evaluations.extend(evaluate_gpus(collection));
     evaluations.extend(evaluate_devices(collection));
+    evaluations.extend(evaluate_event_logs(collection));
     evaluations.extend(evaluate_storage(collection));
     let summary = summarize(&evaluations);
     Diagnosis {
@@ -25,6 +27,77 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
         },
         summary,
         evaluations,
+    }
+}
+
+fn evaluate_event_logs(collection: &Collection) -> Vec<RuleEvaluation> {
+    let mut evaluations = Vec::new();
+    for (field, events) in [
+        ("system", collection.event_logs.system.as_deref()),
+        ("application", collection.event_logs.application.as_deref()),
+        ("security", collection.event_logs.security.as_deref()),
+    ] {
+        let Some(events) = events else {
+            evaluations.push(RuleEvaluation {
+                rule_id: format!("event_log.{field}.availability"),
+                rule_version: "1.0.0".into(),
+                category: "event_log".into(),
+                status: RuleEvaluationStatus::Triggered,
+                severity: Some(Severity::Warning),
+                summary: format!(
+                    "{field}イベントログを取得できませんでした。収集状態で権限、サービスまたはログ破損の理由を確認してください"
+                ),
+                evidence: Vec::new(),
+                criterion: None,
+                reason: None,
+                recommendation: Some(Recommendation {
+                    code: "restore_event_log_collection".into(),
+                }),
+            });
+            continue;
+        };
+        for (index, event) in events.iter().enumerate() {
+            evaluations.push(event_log_evaluation(field, index, event));
+        }
+    }
+    evaluations
+}
+
+fn event_log_evaluation(field: &str, index: usize, event: &EventLogEntry) -> RuleEvaluation {
+    let severity = match (event.log_name.as_str(), event.event_id, event.level) {
+        ("Security", 1102, _) | ("System", 41 | 6008, _) => Severity::Critical,
+        ("Security", 4719, _) => Severity::Error,
+        (_, _, EventLogLevel::Critical) => Severity::Critical,
+        (_, _, EventLogLevel::Error) => Severity::Error,
+        _ => Severity::Warning,
+    };
+    let recommendation = match (event.log_name.as_str(), event.event_id) {
+        ("Security", 1102) => "investigate_audit_log_clearance",
+        ("Security", 4625) => "review_failed_logons",
+        ("Security", 4719) => "review_audit_policy_change",
+        ("System", 41 | 6008) => "investigate_unexpected_shutdown",
+        ("Application", 1000 | 1001 | 1002) => "investigate_application_failure",
+        _ => "review_windows_event",
+    };
+    RuleEvaluation {
+        rule_id: format!("event_log.{}.{}.{}", field, event.event_id, index),
+        rule_version: "1.0.0".into(),
+        category: "event_log".into(),
+        status: RuleEvaluationStatus::Triggered,
+        severity: Some(severity),
+        summary: format!(
+            "{}: {} (event {})",
+            event.occurred_at, event.summary, event.event_id
+        ),
+        evidence: vec![Evidence::Collected {
+            path: format!("/event_logs/{field}/{index}"),
+            value: json!(event),
+        }],
+        criterion: None,
+        reason: None,
+        recommendation: Some(Recommendation {
+            code: recommendation.into(),
+        }),
     }
 }
 
@@ -1504,6 +1577,33 @@ mod tests {
         assert_eq!(
             evaluation.recommendation.as_ref().unwrap().code,
             "review_gpu_enumeration"
+        );
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn diagnoses_high_priority_windows_events() {
+        let mut collection = collection();
+        collection.event_logs.security = Some(vec![EventLogEntry {
+            occurred_at: "2026-07-30T12:00:00Z".into(),
+            log_name: "Security".into(),
+            provider: "Microsoft-Windows-Eventlog".into(),
+            event_id: 1102,
+            level: EventLogLevel::Information,
+            summary: "監査ログが消去されました".into(),
+        }]);
+        let diagnosis = diagnose_collection(&collection);
+        let finding = diagnosis
+            .evaluations
+            .iter()
+            .find(|evaluation| evaluation.rule_id.starts_with("event_log.security.1102"))
+            .unwrap();
+
+        assert_eq!(finding.status, RuleEvaluationStatus::Triggered);
+        assert_eq!(finding.severity, Some(Severity::Critical));
+        assert_eq!(
+            finding.recommendation.as_ref().unwrap().code,
+            "investigate_audit_log_clearance"
         );
         diagnosis.validate_against(&collection).unwrap();
     }

@@ -16,11 +16,11 @@ pub use artifact::{
 pub use collection::{
     BootMode, ClockCollection, Collection, CommitMemory, ConnectedDevice, CpuCollection,
     CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology, DeviceDriver, DeviceState,
-    DiskBusType, DiskPartition, DiskSmart, FirmwareCollection, FirmwareInterfaceType,
-    FirmwareOperationalStatus, Gpu, GpuAdapterType, GpuDeviceState, GpuDriver, GpuMemory,
-    GpuPciIdentifiers, HardwareClock, MemoryCollection, PartitionStyle, PhysicalDisk,
-    PhysicalMemory, SmartProtocol, StorageCollection, StorageVolume, SystemArchitecture,
-    VirtualMemory, VolumeExtent, WindowsCollection, WindowsServiceState,
+    DiskBusType, DiskPartition, DiskSmart, EventLogCollection, EventLogEntry, EventLogLevel,
+    FirmwareCollection, FirmwareInterfaceType, FirmwareOperationalStatus, Gpu, GpuAdapterType,
+    GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers, HardwareClock, MemoryCollection,
+    PartitionStyle, PhysicalDisk, PhysicalMemory, SmartProtocol, StorageCollection, StorageVolume,
+    SystemArchitecture, VirtualMemory, VolumeExtent, WindowsCollection, WindowsServiceState,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
