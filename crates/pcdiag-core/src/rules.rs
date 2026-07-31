@@ -76,7 +76,7 @@ fn event_log_evaluation(field: &str, index: usize, event: &EventLogEntry) -> Rul
         ("Security", 4625) => "review_failed_logons",
         ("Security", 4719) => "review_audit_policy_change",
         ("System", 41 | 6008) => "investigate_unexpected_shutdown",
-        ("Application", 1000 | 1001 | 1002) => "investigate_application_failure",
+        ("Application", 1000..=1002) => "investigate_application_failure",
         _ => "review_windows_event",
     };
     RuleEvaluation {
