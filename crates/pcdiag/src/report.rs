@@ -132,6 +132,7 @@ fn render_html(
         "<!doctype html><html lang=\"ja\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>pcdiag 診断レポート</title><style>\
         :root{color-scheme:light;--bg:#f4f6f8;--card:#fff;--ink:#17202a;--muted:#607080;--line:#dce2e7;--ok:#18794e;--info:#1f6feb;--warn:#9a6700;--error:#cf222e;--critical:#7a0019}\
         *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,-apple-system,\"Segoe UI\",sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{margin:0}h2{margin-top:0}section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px;margin-top:18px}table{width:100%;border-collapse:collapse}th,td{text-align:left;vertical-align:top;border-bottom:1px solid var(--line);padding:8px}th{color:var(--muted);font-weight:600}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.metric{border:1px solid var(--line);border-radius:8px;padding:12px}.metric b{display:block;font-size:1.45rem}.muted{color:var(--muted)}.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-weight:700}.passed{color:var(--ok)}.information{color:var(--info)}.warning{color:var(--warn)}.error{color:var(--error)}.critical{color:var(--critical)}code{overflow-wrap:anywhere}.finding{border-left:5px solid var(--line);padding:10px 14px;margin:12px 0}.finding.warning{border-color:var(--warn)}.finding.error{border-color:var(--error)}.finding.critical{border-color:var(--critical)}.finding.information{border-color:var(--info)}.artifact-notice{background:#fff8c5;border:1px solid #d4a72c;border-radius:10px;padding:20px;margin-top:18px}.artifact-notice h2{font-size:1.1rem}.artifact-notice p{margin-bottom:0}@media print{body{background:#fff}main{max-width:none;padding:0}section,.artifact-notice{break-inside:avoid;border-color:#777}}\
+        details>summary{cursor:pointer;font-size:1.35rem;font-weight:700}details[open]>summary{margin-bottom:12px}\
         </style></head><body><main>",
     );
     let collection_is_partial = collection.manifest.status == ArtifactStatus::Partial;
@@ -170,7 +171,7 @@ fn render_html(
         html.push_str("<section class=\"finding warning\"><h2>情報収集に関する注意</h2><p>一部の情報を取得できなかったため、このレポートには未評価の情報が含まれる可能性があります。診断結果は、取得できた情報と現在の診断規則の範囲に基づきます。</p></section>");
     }
     render_findings(&mut html, result);
-    render_event_logs(&mut html, data);
+    render_event_logs(&mut html, data, result);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
     render_storage(&mut html, data);
@@ -182,91 +183,106 @@ fn render_html(
     html
 }
 
-fn render_event_logs(html: &mut String, data: &Collection) {
-    html.push_str("<section><h2>Windowsイベントログ</h2>");
+fn render_event_logs(html: &mut String, data: &Collection, diagnosis: &Diagnosis) {
+    let evaluations: Vec<_> = diagnosis
+        .evaluations
+        .iter()
+        .filter(|item| {
+            item.category == "event_log" && item.status == RuleEvaluationStatus::Triggered
+        })
+        .collect();
+    html.push_str("<section><details open>");
     write!(
         html,
-        "<p class=\"muted\">収集期間: 過去{}日（各ログ最大1000件）</p>",
-        data.event_logs.lookback_days
+        "<summary>Windowsイベントログ（検出 {}件）</summary><p class=\"muted\">収集期間: 過去{}日（各ログ最大1000件） / System: {} / Application: {} / Security: {}</p>",
+        evaluations.len(),
+        data.event_logs.lookback_days,
+        count_or_unavailable(data.event_logs.system.as_ref().map(Vec::len)),
+        count_or_unavailable(data.event_logs.application.as_ref().map(Vec::len)),
+        count_or_unavailable(data.event_logs.security.as_ref().map(Vec::len)),
     )
     .unwrap();
     html.push_str("<table><thead><tr><th>重大度</th><th>発生時刻</th><th>概要</th><th>ログ名</th><th>対処の目安</th></tr></thead><tbody>");
-    let mut event_count = 0;
-    let mut available_logs = 0;
-    for (log_name, events) in [
-        ("System", data.event_logs.system.as_deref()),
-        ("Application", data.event_logs.application.as_deref()),
-        ("Security", data.event_logs.security.as_deref()),
-    ] {
-        let Some(events) = events else {
-            write!(
-                html,
-                "<tr><td class=\"warning\">未取得</td><td>—</td><td>収集状態で取得不能理由を確認してください。</td><td>{}</td><td>権限、イベントログサービス、監査設定、ログの状態を確認してください。</td></tr>",
-                log_name,
-            )
-            .unwrap();
-            continue;
-        };
-        available_logs += 1;
-        for event in events {
-            event_count += 1;
-            let (severity, recommendation) =
-                event_log_display(event.log_name.as_str(), event.event_id, event.level);
-            write!(
-                html,
-                "<tr><td class=\"{}\">{}</td><td>{}</td><td>{} <span class=\"muted\">({} / {})</span></td><td>{}</td><td>{}</td></tr>",
-                severity_class(Some(severity)),
-                severity_text(severity),
-                escape(&event.occurred_at),
-                escape(&event.summary),
-                escape(&event.provider),
-                event.event_id,
-                escape(&event.log_name),
-                recommendation,
-            )
-            .unwrap();
-        }
+    for evaluation in &evaluations {
+        let severity = evaluation.severity.unwrap_or(Severity::Information);
+        let event = evaluation
+            .evidence
+            .iter()
+            .find_map(|evidence| match evidence {
+                Evidence::Collected { value, .. } => Some(value),
+                Evidence::Derived { .. } => None,
+            });
+        let occurred_at = event
+            .and_then(|value| value.get("occurred_at"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("—");
+        let log_name = event
+            .and_then(|value| value.get("log_name"))
+            .and_then(|value| value.as_str())
+            .unwrap_or_else(|| event_log_name_from_rule(&evaluation.rule_id));
+        let recommendation = evaluation
+            .recommendation
+            .as_ref()
+            .map(|value| event_recommendation_text(&value.code))
+            .unwrap_or("イベントの詳細を確認してください。");
+        write!(
+            html,
+            "<tr><td class=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            severity_class(Some(severity)),
+            severity_text(severity),
+            escape(occurred_at),
+            escape(&evaluation.summary),
+            escape(log_name),
+            recommendation,
+        )
+        .unwrap();
     }
-    if event_count == 0 && available_logs > 0 {
+    if evaluations.is_empty() {
         html.push_str("<tr><td colspan=\"5\" class=\"passed\">取得できた範囲に高優先度イベントはありません。</td></tr>");
     }
-    html.push_str("</tbody></table></section>");
+    html.push_str("</tbody></table></details></section>");
 }
 
-fn event_log_display(
-    log_name: &str,
-    event_id: u32,
-    level: pcdiag_core::EventLogLevel,
-) -> (Severity, &'static str) {
-    use pcdiag_core::EventLogLevel;
-    let severity = match (log_name, event_id, level) {
-        ("Security", 1102, _) | ("System", 41 | 6008, _) => Severity::Critical,
-        ("Security", 4719, _) => Severity::Error,
-        (_, _, EventLogLevel::Critical) => Severity::Critical,
-        (_, _, EventLogLevel::Error) => Severity::Error,
-        _ => Severity::Warning,
-    };
-    let recommendation = match (log_name, event_id) {
-        ("Security", 1102) => "監査ログ消去の実施者と経緯を直ちに確認してください。",
-        ("Security", 4625) => "失敗したログオンの対象・発生元・頻度を確認してください。",
-        ("Security", 4719) => "監査ポリシー変更が承認済みか確認してください。",
-        ("System", 41 | 6008) => "電源、温度、ドライバー、直前の操作を確認してください。",
-        ("Application", 1000..=1002) => {
+fn count_or_unavailable(value: Option<usize>) -> String {
+    value.map_or_else(|| "未取得".into(), |count| format!("{count}件"))
+}
+
+fn event_log_name_from_rule(rule_id: &str) -> &'static str {
+    if rule_id.starts_with("event_log.system.") {
+        "System"
+    } else if rule_id.starts_with("event_log.application.") {
+        "Application"
+    } else {
+        "Security"
+    }
+}
+
+fn event_recommendation_text(code: &str) -> &'static str {
+    match code {
+        "restore_event_log_collection" => {
+            "権限、イベントログサービス、監査設定、ログの状態を確認してください。"
+        }
+        "investigate_audit_log_clearance" => "監査ログ消去の実施者と経緯を確認してください。",
+        "review_failed_logons" => "失敗したログオンの対象・発生元・頻度を確認してください。",
+        "review_audit_policy_change" => "監査ポリシー変更が承認済みか確認してください。",
+        "investigate_unexpected_shutdown" => {
+            "電源、温度、ドライバー、直前の操作を確認してください。"
+        }
+        "review_storage_io_failure" => "ストレージ、ケーブル、ドライバーを確認してください。",
+        "investigate_service_failure" => "対象サービスと依存サービスを確認してください。",
+        "investigate_application_failure" => {
             "障害アプリケーションとモジュールを確認し、更新または修復してください。"
         }
         _ => "イベントの詳細と同時刻の関連イベントを確認してください。",
-    };
-    (severity, recommendation)
+    }
 }
 
 fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
     html.push_str("<section><h2>検出事項</h2>");
     let mut found = false;
-    for evaluation in diagnosis
-        .evaluations
-        .iter()
-        .filter(|item| item.status == RuleEvaluationStatus::Triggered)
-    {
+    for evaluation in diagnosis.evaluations.iter().filter(|item| {
+        item.status == RuleEvaluationStatus::Triggered && item.category != "event_log"
+    }) {
         found = true;
         let severity = evaluation.severity.unwrap_or(Severity::Information);
         write!(html, "<article class=\"finding {}\"><strong>{}</strong> <span class=\"badge {}\">{}</span><p>{}</p>", severity_class(Some(severity)), escape(&evaluation.rule_id), severity_class(Some(severity)), severity_text(severity), escape(&evaluation.summary)).unwrap();
@@ -298,7 +314,9 @@ fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
         html.push_str("</article>");
     }
     if !found {
-        html.push_str("<p class=\"passed\">診断規則による異常所見はありません。</p>");
+        html.push_str(
+            "<p class=\"passed\">イベントログ以外の診断規則による異常所見はありません。</p>",
+        );
     }
     let counts = &diagnosis.summary.evaluations;
     write!(html, "<p class=\"muted\">評価: passed {} / triggered {} / not applicable {} / not evaluated {} / failed {}</p></section>", counts.passed, counts.triggered, counts.not_applicable, counts.not_evaluated, counts.failed).unwrap();
@@ -758,6 +776,9 @@ mod tests {
         let html = render_html(&collection, &diagnosis);
 
         assert!(html.contains("Windowsイベントログ"));
+        assert!(html.contains("<details open>"));
+        assert!(html.contains("Windowsイベントログ（検出 1件）"));
+        assert!(html.contains("Application: 1件"));
         assert!(html.contains("2026-07-30T12:00:00Z"));
         assert!(html.contains("Application"));
         assert!(html.contains("障害アプリケーションとモジュール"));
@@ -774,7 +795,7 @@ mod tests {
         diagnosis.diagnosis = diagnose_collection(&collection.collection);
         let html = render_html(&collection, &diagnosis);
 
-        assert_eq!(html.matches("収集状態で取得不能理由を確認").count(), 3);
+        assert_eq!(html.matches("未取得").count(), 3);
         assert!(!html.contains("取得できた範囲に高優先度イベントはありません。"));
     }
 

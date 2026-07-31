@@ -4,9 +4,8 @@ use serde_json::{Value, json};
 
 use crate::{
     Collection, ConnectedDevice, Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts,
-    EvaluationReason, EventLogEntry, EventLogLevel, Evidence, FindingCounts, Gpu, GpuAdapterType,
-    MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus, RuleSetInfo, Severity,
-    SmartProtocol,
+    EvaluationReason, EventLogEntry, Evidence, FindingCounts, Gpu, GpuAdapterType, MeasurementUnit,
+    Recommendation, RuleEvaluation, RuleEvaluationStatus, RuleSetInfo, Severity, SmartProtocol,
 };
 
 const MEMORY_AVAILABLE_THRESHOLD_PERCENT: f64 = 10.0;
@@ -23,7 +22,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     Diagnosis {
         rule_set: RuleSetInfo {
             name: "pcdiag_builtin".into(),
-            version: "0.6.0".into(),
+            version: "0.7.0".into(),
         },
         summary,
         evaluations,
@@ -32,6 +31,7 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
 
 fn evaluate_event_logs(collection: &Collection) -> Vec<RuleEvaluation> {
     let mut evaluations = Vec::new();
+    let mut groups: BTreeMap<(String, String), Vec<(usize, &EventLogEntry)>> = BTreeMap::new();
     for (field, events) in [
         ("system", collection.event_logs.system.as_deref()),
         ("application", collection.event_logs.application.as_deref()),
@@ -57,41 +57,95 @@ fn evaluate_event_logs(collection: &Collection) -> Vec<RuleEvaluation> {
             continue;
         };
         for (index, event) in events.iter().enumerate() {
-            evaluations.push(event_log_evaluation(field, index, event));
+            if let Some(kind) = diagnostic_event_kind(event) {
+                groups
+                    .entry((field.into(), kind.into()))
+                    .or_default()
+                    .push((index, event));
+            }
         }
     }
+    evaluations.extend(groups.into_iter().map(|((field, kind), events)| {
+        aggregated_event_log_evaluation(&field, &kind, &events, collection.event_logs.lookback_days)
+    }));
     evaluations
 }
 
-fn event_log_evaluation(field: &str, index: usize, event: &EventLogEntry) -> RuleEvaluation {
-    let severity = match (event.log_name.as_str(), event.event_id, event.level) {
-        ("Security", 1102, _) | ("System", 41 | 6008, _) => Severity::Critical,
-        ("Security", 4719, _) => Severity::Error,
-        (_, _, EventLogLevel::Critical) => Severity::Critical,
-        (_, _, EventLogLevel::Error) => Severity::Error,
-        _ => Severity::Warning,
-    };
-    let recommendation = match (event.log_name.as_str(), event.event_id) {
-        ("Security", 1102) => "investigate_audit_log_clearance",
-        ("Security", 4625) => "review_failed_logons",
-        ("Security", 4719) => "review_audit_policy_change",
-        ("System", 41 | 6008) => "investigate_unexpected_shutdown",
-        ("Application", 1000..=1002) => "investigate_application_failure",
-        _ => "review_windows_event",
+fn diagnostic_event_kind(event: &EventLogEntry) -> Option<&'static str> {
+    match (event.log_name.as_str(), event.event_id) {
+        ("System", 41 | 6008) => Some("unexpected_shutdown"),
+        ("System", 7 | 11 | 51 | 55 | 129 | 153) => Some("storage_io_failure"),
+        ("System", 7000 | 7001 | 7009 | 7011 | 7023 | 7024 | 7031 | 7034) => {
+            Some("service_failure")
+        }
+        ("Application", 1000..=1002) => Some("application_failure"),
+        ("Security", 1102) => Some("audit_log_cleared"),
+        ("Security", 4625) => Some("failed_logon"),
+        ("Security", 4719) => Some("audit_policy_changed"),
+        _ => None,
+    }
+}
+
+fn aggregated_event_log_evaluation(
+    field: &str,
+    kind: &str,
+    events: &[(usize, &EventLogEntry)],
+    lookback_days: u32,
+) -> RuleEvaluation {
+    let &(index, latest) = events
+        .iter()
+        .max_by_key(|(_, event)| event.occurred_at.as_str())
+        .expect("event groups are never empty");
+    let (severity, recommendation, label) = match kind {
+        "unexpected_shutdown" => (
+            Severity::Critical,
+            "investigate_unexpected_shutdown",
+            "予期しないシャットダウン",
+        ),
+        "storage_io_failure" => (
+            Severity::Error,
+            "review_storage_io_failure",
+            "ストレージI/O障害",
+        ),
+        "service_failure" => (
+            Severity::Error,
+            "investigate_service_failure",
+            "Windowsサービス障害",
+        ),
+        "application_failure" => (
+            Severity::Error,
+            "investigate_application_failure",
+            "アプリケーション異常終了",
+        ),
+        "audit_log_cleared" => (
+            Severity::Critical,
+            "investigate_audit_log_clearance",
+            "監査ログの消去",
+        ),
+        "failed_logon" => (Severity::Warning, "review_failed_logons", "ログオン失敗"),
+        "audit_policy_changed" => (
+            Severity::Error,
+            "review_audit_policy_change",
+            "監査ポリシー変更",
+        ),
+        _ => unreachable!("only classified event kinds are grouped"),
     };
     RuleEvaluation {
-        rule_id: format!("event_log.{}.{}.{}", field, event.event_id, index),
+        rule_id: format!("event_log.{field}.{kind}"),
         rule_version: "1.0.0".into(),
         category: "event_log".into(),
         status: RuleEvaluationStatus::Triggered,
         severity: Some(severity),
         summary: format!(
-            "{}: {} (event {})",
-            event.occurred_at, event.summary, event.event_id
+            "{label}を過去{lookback_days}日間に{}件検出しました。最新: {}: {} (event {})",
+            events.len(),
+            latest.occurred_at,
+            latest.summary,
+            latest.event_id
         ),
         evidence: vec![Evidence::Collected {
             path: format!("/event_logs/{field}/{index}"),
-            value: json!(event),
+            value: json!(latest),
         }],
         criterion: None,
         reason: None,
@@ -1367,7 +1421,7 @@ mod tests {
         let collection = gpu_collection();
         let diagnosis = diagnose_collection(&collection);
 
-        assert_eq!(diagnosis.rule_set.version, "0.6.0");
+        assert_eq!(diagnosis.rule_set.version, "0.7.0");
         assert!(diagnosis.evaluations[1..5].iter().all(|evaluation| {
             evaluation.category == "gpu" && evaluation.status == RuleEvaluationStatus::Passed
         }));
@@ -1589,14 +1643,14 @@ mod tests {
             log_name: "Security".into(),
             provider: "Microsoft-Windows-Eventlog".into(),
             event_id: 1102,
-            level: EventLogLevel::Information,
+            level: crate::EventLogLevel::Information,
             summary: "監査ログが消去されました".into(),
         }]);
         let diagnosis = diagnose_collection(&collection);
         let finding = diagnosis
             .evaluations
             .iter()
-            .find(|evaluation| evaluation.rule_id.starts_with("event_log.security.1102"))
+            .find(|evaluation| evaluation.rule_id == "event_log.security.audit_log_cleared")
             .unwrap();
 
         assert_eq!(finding.status, RuleEvaluationStatus::Triggered);
@@ -1605,6 +1659,54 @@ mod tests {
             finding.recommendation.as_ref().unwrap().code,
             "investigate_audit_log_clearance"
         );
+        diagnosis.validate_against(&collection).unwrap();
+    }
+
+    #[test]
+    fn filters_noisy_events_and_aggregates_repeated_findings() {
+        let mut collection = collection();
+        collection.event_logs.system = Some(vec![EventLogEntry {
+            occurred_at: "2026-07-30T10:00:00Z".into(),
+            log_name: "System".into(),
+            provider: "Microsoft-Windows-DistributedCOM".into(),
+            event_id: 10016,
+            level: crate::EventLogLevel::Warning,
+            summary: "DCOM permission warning".into(),
+        }]);
+        collection.event_logs.application = Some(vec![
+            EventLogEntry {
+                occurred_at: "2026-07-29T10:00:00Z".into(),
+                log_name: "Application".into(),
+                provider: "Application Error".into(),
+                event_id: 1000,
+                level: crate::EventLogLevel::Error,
+                summary: "first crash".into(),
+            },
+            EventLogEntry {
+                occurred_at: "2026-07-30T10:00:00Z".into(),
+                log_name: "Application".into(),
+                provider: "Application Error".into(),
+                event_id: 1000,
+                level: crate::EventLogLevel::Error,
+                summary: "latest crash".into(),
+            },
+        ]);
+
+        let diagnosis = diagnose_collection(&collection);
+        let event_findings: Vec<_> = diagnosis
+            .evaluations
+            .iter()
+            .filter(|evaluation| evaluation.category == "event_log")
+            .collect();
+
+        assert_eq!(event_findings.len(), 1);
+        assert_eq!(
+            event_findings[0].rule_id,
+            "event_log.application.application_failure"
+        );
+        assert!(event_findings[0].summary.contains("2件"));
+        assert!(event_findings[0].summary.contains("latest crash"));
+        assert_eq!(event_findings[0].evidence.len(), 1);
         diagnosis.validate_against(&collection).unwrap();
     }
 }
