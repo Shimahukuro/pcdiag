@@ -103,6 +103,55 @@ impl Collection {
                 "must be a UTC date-time ending in Z",
             );
         }
+        if self.windows_updates.lookback_days == Some(0) {
+            push_error(
+                &mut errors,
+                "/windows_updates/lookback_days",
+                "must be greater than zero or null for all history",
+            );
+        }
+        if self.windows_updates.max_entries == Some(0) {
+            push_error(
+                &mut errors,
+                "/windows_updates/max_entries",
+                "must be greater than zero or null for all history",
+            );
+        }
+        if let Some(history) = &self.windows_updates.history {
+            for (index, entry) in history.iter().enumerate() {
+                let base = format!("/windows_updates/history/{index}");
+                if !entry.occurred_at.contains('T') || !entry.occurred_at.ends_with('Z') {
+                    push_error(
+                        &mut errors,
+                        format!("{base}/occurred_at"),
+                        "must be a UTC date-time ending in Z",
+                    );
+                }
+                if entry.title.as_deref() == Some("") {
+                    push_error(&mut errors, format!("{base}/title"), "must not be empty");
+                }
+                let mut kb_ids = HashSet::new();
+                for (kb_index, kb_id) in entry.kb_ids.iter().enumerate() {
+                    if !kb_id.starts_with("KB")
+                        || kb_id.len() < 8
+                        || !kb_id[2..].bytes().all(|value| value.is_ascii_digit())
+                    {
+                        push_error(
+                            &mut errors,
+                            format!("{base}/kb_ids/{kb_index}"),
+                            "must be an uppercase KB identifier",
+                        );
+                    }
+                    if !kb_ids.insert(kb_id) {
+                        push_error(
+                            &mut errors,
+                            format!("{base}/kb_ids/{kb_index}"),
+                            "must be unique within the history entry",
+                        );
+                    }
+                }
+            }
+        }
         if let Some(system_time) = &self.clock.system_time_utc
             && (!system_time.contains('T') || !system_time.ends_with('Z'))
         {
@@ -568,6 +617,20 @@ impl Collection {
         } else if let Some(collector) = windows_collectors.first() {
             validate_windows_status(self, collector, &mut errors);
         }
+        let windows_update_collectors: Vec<_> = status
+            .collectors
+            .iter()
+            .filter(|collector| collector.name == CollectorName::WindowsUpdates)
+            .collect();
+        if windows_update_collectors.len() > 1 {
+            push_error(
+                &mut errors,
+                "/collectors",
+                "must not contain more than one Windows Update collector result",
+            );
+        } else if let Some(collector) = windows_update_collectors.first() {
+            validate_windows_update_status(self, collector, &mut errors);
+        }
         let clock_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -733,6 +796,64 @@ impl Collection {
             }
         }
         finish(errors)
+    }
+}
+
+fn validate_windows_update_status(
+    collection: &Collection,
+    collector: &CollectorResult,
+    errors: &mut Vec<ValidationError>,
+) {
+    match collector.status {
+        CollectorStatus::Success => {
+            if collection.windows_updates.history.is_none() || !collector.fields.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/windows_updates/status",
+                    "successful collector requires a history array and no field failures",
+                );
+            }
+            if collector.messages.iter().any(|message| {
+                !matches!(
+                    message.code.as_str(),
+                    "windows_update_history_truncated_by_date"
+                        | "windows_update_history_truncated_by_count"
+                )
+            }) {
+                push_error(
+                    errors,
+                    "/collectors/windows_updates/messages",
+                    "successful collector messages must only describe configured truncation",
+                );
+            }
+        }
+        CollectorStatus::Partial => {
+            if collection.windows_updates.history.is_none() || collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/windows_updates/status",
+                    "partial collector requires collected history and a reason",
+                );
+            }
+        }
+        CollectorStatus::Skipped | CollectorStatus::Failed => {
+            if collection.windows_updates.history.is_some() || collector.messages.is_empty() {
+                push_error(
+                    errors,
+                    "/collectors/windows_updates/status",
+                    "skipped or failed collector requires null history and a reason",
+                );
+            }
+        }
+    }
+    for field in &collector.fields {
+        if field.path != "/windows_updates/history" {
+            push_error(
+                errors,
+                &field.path,
+                "Windows Update field result refers to an unknown path",
+            );
+        }
     }
 }
 
@@ -1959,6 +2080,7 @@ mod tests {
     fn complete_collection() -> Collection {
         Collection {
             windows: windows_collection(),
+            windows_updates: Default::default(),
             clock: clock_collection(),
             cpu: cpu_collection(),
             firmware: firmware_collection(),
@@ -1992,6 +2114,7 @@ mod tests {
     fn null_collection() -> Collection {
         Collection {
             windows: windows_collection(),
+            windows_updates: Default::default(),
             clock: clock_collection(),
             cpu: cpu_collection(),
             firmware: firmware_collection(),

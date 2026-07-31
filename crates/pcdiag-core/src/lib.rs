@@ -21,6 +21,8 @@ pub use collection::{
     GpuDeviceState, GpuDriver, GpuMemory, GpuPciIdentifiers, HardwareClock, MemoryCollection,
     PartitionStyle, PhysicalDisk, PhysicalMemory, SmartProtocol, StorageCollection, StorageVolume,
     SystemArchitecture, VirtualMemory, VolumeExtent, WindowsCollection, WindowsServiceState,
+    WindowsUpdateCollection, WindowsUpdateHistoryEntry, WindowsUpdateOperation,
+    WindowsUpdateResult,
 };
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,

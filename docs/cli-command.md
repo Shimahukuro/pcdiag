@@ -39,3 +39,27 @@ pcdiag.exe report --output <セッションディレクトリ>
 ```
 
 個別実行の成果物形式と上書き防止規則は、引数なし実行でも変更しない。
+
+## Windows Update履歴の収集オプション
+
+Windows Update履歴は、既定で収集開始時刻から過去180日間、最大1,000件を新しい順に取得する。引数なしの一括実行と`collect`コマンドで、次のオプションを指定できる。
+
+```text
+--windows-update-days <日数|all>
+--windows-update-max-entries <件数|all>
+--windows-update-all
+```
+
+- `--windows-update-days`は1から3,650の日数、または期間制限を設けない`all`を受け付ける。
+- `--windows-update-max-entries`は1から100,000の件数、または件数制限を設けない`all`を受け付ける。
+- `--windows-update-all`は期間と件数の両方を無制限にする。
+- 後に指定した個別オプションは`--windows-update-all`の設定を上書きできる。
+
+例:
+
+```text
+pcdiag.exe collect --output results --windows-update-days 90 --windows-update-max-entries 500
+pcdiag.exe collect --output results --windows-update-all
+```
+
+期間または件数により履歴を打ち切った場合は、`status.json`のWindows Updateコレクターへ切り捨て理由を記録する。

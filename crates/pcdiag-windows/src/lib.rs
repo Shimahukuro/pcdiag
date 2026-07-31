@@ -13,6 +13,7 @@ mod physical_disks;
 mod smart;
 mod volumes;
 mod windows_info;
+mod windows_updates;
 
 pub use clock::{ClockCollectionResult, collect_clock};
 pub use collect::{CompleteCollectionResult, collect_all};
@@ -27,3 +28,6 @@ pub use physical_disks::{PhysicalDiskCollectionResult, collect_physical_disks};
 pub use smart::{SmartCollectionResult, collect_smart};
 pub use volumes::{VolumeCollectionResult, collect_volumes};
 pub use windows_info::{WindowsCollectionResult, collect_windows_info};
+pub use windows_updates::{
+    WindowsUpdateCollectionOptions, WindowsUpdateCollectionResult, collect_windows_updates,
+};
