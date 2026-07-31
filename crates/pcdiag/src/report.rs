@@ -273,7 +273,7 @@ fn render_windows_update_group(
             write!(
                 html,
                 "<tr><td class=\"nowrap\">{}</td><td class=\"update-title\">{}</td><td>{}</td><td class=\"{}\">{}</td><td><code>{} (0x{:08X})</code></td><td>{}</td></tr>",
-                escape(&entry.occurred_at),
+                escape(&format_jst(&entry.occurred_at)),
                 escape(entry.title.as_deref().unwrap_or("タイトルなし")),
                 escape(&kb_ids),
                 class,
@@ -298,6 +298,71 @@ fn windows_update_result_text(result: WindowsUpdateResult) -> &'static str {
         WindowsUpdateResult::Failed => "失敗",
         WindowsUpdateResult::Aborted => "中断",
         WindowsUpdateResult::Unknown => "不明",
+    }
+}
+
+fn format_jst(value: &str) -> String {
+    let Some(utc) = value.strip_suffix('Z') else {
+        return value.into();
+    };
+    let Some((date, time)) = utc.split_once('T') else {
+        return value.into();
+    };
+    let date_parts: Vec<_> = date.split('-').collect();
+    let time_parts: Vec<_> = time.split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return value.into();
+    }
+    let seconds_text = time_parts[2]
+        .split_once('.')
+        .map_or(time_parts[2], |(seconds, _)| seconds);
+    let (Ok(mut year), Ok(mut month), Ok(mut day), Ok(mut hour), Ok(minute), Ok(second)) = (
+        date_parts[0].parse::<u32>(),
+        date_parts[1].parse::<u32>(),
+        date_parts[2].parse::<u32>(),
+        time_parts[0].parse::<u32>(),
+        time_parts[1].parse::<u32>(),
+        seconds_text.parse::<u32>(),
+    ) else {
+        return value.into();
+    };
+    if year == 0
+        || !(1..=12).contains(&month)
+        || day == 0
+        || day > report_days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return value.into();
+    }
+    hour += 9;
+    if hour >= 24 {
+        hour -= 24;
+        day += 1;
+        if day > report_days_in_month(year, month) {
+            day = 1;
+            month += 1;
+            if month > 12 {
+                month = 1;
+                year += 1;
+            }
+        }
+    }
+    format!(
+        "{year:04}-{month:02}-{day:02} {hour:02}:{}:{} JST",
+        time_parts[1], time_parts[2]
+    )
+}
+
+fn report_days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year.is_multiple_of(400) || (year.is_multiple_of(4) && !year.is_multiple_of(100)) => {
+            29
+        }
+        2 => 28,
+        _ => 31,
     }
 }
 
@@ -827,6 +892,23 @@ mod tests {
     }
 
     #[test]
+    fn formats_utc_windows_update_times_as_jst() {
+        assert_eq!(
+            format_jst("2026-07-30T23:44:53.0000000Z"),
+            "2026-07-31 08:44:53.0000000 JST"
+        );
+        assert_eq!(
+            format_jst("2026-12-31T18:00:00Z"),
+            "2027-01-01 03:00:00 JST"
+        );
+        assert_eq!(
+            format_jst("2028-02-29T20:00:00Z"),
+            "2028-03-01 05:00:00 JST"
+        );
+        assert_eq!(format_jst("invalid"), "invalid");
+    }
+
+    #[test]
     fn formats_failure_prediction_smart_without_ambiguous_labels() {
         let smart = DiskSmart {
             disk_number: 0,
@@ -964,6 +1046,8 @@ mod tests {
         assert!(!html.contains("<script>alert"));
         assert!(html.contains("-2145124330 (0x80240016)"));
         assert!(html.contains("aborted-1"));
+        assert!(html.contains("2026-07-30 21:00:00 JST"));
+        assert!(!html.contains("2026-07-30T12:00:00Z"));
     }
 
     #[test]
