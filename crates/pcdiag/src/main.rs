@@ -1,5 +1,6 @@
 mod bundle;
 mod diagnose;
+mod interrupt;
 mod report;
 
 use pcdiag_windows::WindowsUpdateCollectionOptions;
@@ -20,6 +21,10 @@ fn main() -> ExitCode {
     };
     if command.handles_artifacts() {
         eprintln!("{SENSITIVE_DATA_NOTICE}");
+        if let Err(error) = interrupt::install_handler() {
+            eprintln!("pcdiag: 中断ハンドラーを登録できませんでした: {error}");
+            return ExitCode::from(1);
+        }
     }
     match command {
         Command::DefaultPipeline {
@@ -32,7 +37,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
+                exit_code_for_pipeline_error(&error)
             }
         },
         Command::Collect {
@@ -45,7 +50,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
+                exit_code_for_interrupted(error.is_interrupted())
             }
         },
         Command::Diagnose { output } => match diagnose::diagnose_bundle(&output) {
@@ -55,7 +60,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
+                exit_code_for_interrupted(error.is_interrupted())
             }
         },
         Command::Report { output } => match report::generate_report(&output) {
@@ -65,7 +70,7 @@ fn main() -> ExitCode {
             }
             Err(error) => {
                 eprintln!("pcdiag: {error}");
-                ExitCode::from(1)
+                exit_code_for_interrupted(error.is_interrupted())
             }
         },
         Command::Help => {
@@ -73,6 +78,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
     }
+}
+
+fn exit_code_for_interrupted(interrupted: bool) -> ExitCode {
+    ExitCode::from(if interrupted { interrupt::EXIT_CODE } else { 1 })
+}
+
+fn exit_code_for_pipeline_error(error: &PipelineError) -> ExitCode {
+    exit_code_for_interrupted(matches!(error, PipelineError::Interrupted(_)))
 }
 
 const SENSITIVE_DATA_NOTICE: &str = "\
@@ -254,22 +267,18 @@ fn print_help() {
 fn run_default_pipeline(
     output_root: &Path,
     windows_updates: WindowsUpdateCollectionOptions,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, PipelineError> {
     run_pipeline(
         output_root,
         |output| {
-            bundle::collect_to_bundle(output, windows_updates)
-                .map_err(|error| format!("collectに失敗しました: {error}"))
+            bundle::collect_to_bundle(output, windows_updates).map_err(PipelineError::from_bundle)
         },
         |session| {
             diagnose::diagnose_bundle(session)
                 .map(|_| ())
-                .map_err(|error| format!("diagnoseに失敗しました: {error}"))
+                .map_err(PipelineError::from_diagnose)
         },
-        |session| {
-            report::generate_report(session)
-                .map_err(|error| format!("reportに失敗しました: {error}"))
-        },
+        |session| report::generate_report(session).map_err(PipelineError::from_report),
     )
 }
 
@@ -278,20 +287,77 @@ fn run_pipeline<C, D, R>(
     collect: C,
     diagnose: D,
     report: R,
-) -> Result<PathBuf, String>
+) -> Result<PathBuf, PipelineError>
 where
-    C: FnOnce(&Path) -> Result<PathBuf, String>,
-    D: FnOnce(&Path) -> Result<(), String>,
-    R: FnOnce(&Path) -> Result<PathBuf, String>,
+    C: FnOnce(&Path) -> Result<PathBuf, PipelineError>,
+    D: FnOnce(&Path) -> Result<(), PipelineError>,
+    R: FnOnce(&Path) -> Result<PathBuf, PipelineError>,
 {
+    run_pipeline_with_interrupt_check(output_root, collect, diagnose, report, interrupt::check)
+}
+
+fn run_pipeline_with_interrupt_check<C, D, R, I>(
+    output_root: &Path,
+    collect: C,
+    diagnose: D,
+    report: R,
+    check_interrupt: I,
+) -> Result<PathBuf, PipelineError>
+where
+    C: FnOnce(&Path) -> Result<PathBuf, PipelineError>,
+    D: FnOnce(&Path) -> Result<(), PipelineError>,
+    R: FnOnce(&Path) -> Result<PathBuf, PipelineError>,
+    I: Fn(&'static str) -> Result<(), interrupt::Interrupted>,
+{
+    check_interrupt("collect").map_err(PipelineError::Interrupted)?;
     eprintln!("pcdiag: 情報収集を開始します");
     let session = collect(output_root)?;
+    check_interrupt("diagnose").map_err(PipelineError::Interrupted)?;
     eprintln!("pcdiag: 診断を開始します: {}", session.display());
     diagnose(&session)?;
+    check_interrupt("report").map_err(PipelineError::Interrupted)?;
     eprintln!("pcdiag: レポートを生成します: {}", session.display());
     let report = report(&session)?;
     eprintln!("pcdiag: 完了しました");
     Ok(report)
+}
+
+#[derive(Debug)]
+enum PipelineError {
+    Failed(String),
+    Interrupted(interrupt::Interrupted),
+}
+
+impl PipelineError {
+    fn from_bundle(error: bundle::BundleError) -> Self {
+        match error {
+            bundle::BundleError::Interrupted(error) => Self::Interrupted(error),
+            error => Self::Failed(format!("collectに失敗しました: {error}")),
+        }
+    }
+
+    fn from_diagnose(error: diagnose::DiagnoseError) -> Self {
+        match error {
+            diagnose::DiagnoseError::Interrupted(error) => Self::Interrupted(error),
+            error => Self::Failed(format!("diagnoseに失敗しました: {error}")),
+        }
+    }
+
+    fn from_report(error: report::ReportError) -> Self {
+        match error {
+            report::ReportError::Interrupted(error) => Self::Interrupted(error),
+            error => Self::Failed(format!("reportに失敗しました: {error}")),
+        }
+    }
+}
+
+impl std::fmt::Display for PipelineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(message) => formatter.write_str(message),
+            Self::Interrupted(error) => error.fmt(formatter),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -495,7 +561,7 @@ mod tests {
         let error = run_pipeline(
             Path::new("results"),
             |_| Ok(PathBuf::from("results/pcdiag-session")),
-            |_| Err("diagnose error".into()),
+            |_| Err(PipelineError::Failed("diagnose error".into())),
             {
                 let report_called = Rc::clone(&report_called);
                 move |_| {
@@ -506,7 +572,42 @@ mod tests {
         )
         .unwrap_err();
 
-        assert_eq!(error, "diagnose error");
+        assert!(matches!(error, PipelineError::Failed(message) if message == "diagnose error"));
+        assert!(!*report_called.borrow());
+    }
+
+    #[test]
+    fn default_pipeline_does_not_start_the_next_stage_after_interruption() {
+        let diagnose_called = Rc::new(RefCell::new(false));
+        let report_called = Rc::new(RefCell::new(false));
+        let result = run_pipeline_with_interrupt_check(
+            Path::new("results"),
+            |_| Ok(PathBuf::from("results/pcdiag-session")),
+            {
+                let diagnose_called = Rc::clone(&diagnose_called);
+                move |_| {
+                    *diagnose_called.borrow_mut() = true;
+                    Ok(())
+                }
+            },
+            {
+                let report_called = Rc::clone(&report_called);
+                move |_| {
+                    *report_called.borrow_mut() = true;
+                    Ok(PathBuf::from("unreachable"))
+                }
+            },
+            |stage| {
+                if stage == "diagnose" {
+                    Err(interrupt::Interrupted::for_stage(stage))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(PipelineError::Interrupted(_))));
+        assert!(!*diagnose_called.borrow());
         assert!(!*report_called.borrow());
     }
 }

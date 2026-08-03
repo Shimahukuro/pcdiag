@@ -16,7 +16,9 @@ mod windows_info;
 mod windows_updates;
 
 pub use clock::{ClockCollectionResult, collect_clock};
-pub use collect::{CompleteCollectionResult, collect_all};
+pub use collect::{
+    CollectionInterrupted, CompleteCollectionResult, collect_all, collect_all_cancellable,
+};
 pub use cpu::{CpuCollectionResult, collect_cpu};
 pub use devices::{DeviceCollectionResult, collect_devices};
 pub use event_logs::{EventLogCollectionResult, collect_event_logs};
