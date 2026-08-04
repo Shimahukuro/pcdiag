@@ -50,8 +50,27 @@ pcdiag.exe collect --output results `
 
 ## Windows実機確認
 
-1. Releaseビルドで通常の`collect`を実行し、13コレクターの結果と処理時間が`status.json`へ記録されることを確認する。
-2. デバッガーまたは応答を停止できるテスト用Windows APIフックを使って任意のワーカーを停止し、そのコレクターの制限時間を1秒にする。
-3. 対象が`failed`、理由が`collector_timeout`となり、直後のコレクターも実行されることを確認する。
-4. タスクマネージャーまたはProcess Explorerで、停止したワーカーと子孫PowerShellが残っていないことを確認する。
-5. 収集中に`Ctrl+C`を1回押し、実行中ワーカーが終了し、終了コード130、`.incomplete`、`interruption.log`が中断仕様に従うことを確認する。
+最初にReleaseビルドで通常の`collect`を実行し、13コレクターの結果と処理時間が`status.json`へ記録されることを確認する。
+
+タイムアウトは、デバッグビルド限定の遅延フックを使って再現する。Releaseビルドにはこのフックの環境変数を読み取るコードが含まれず、通常利用者向けのCLIオプションにも公開しない。
+
+Windowsのコマンドプロンプトで次を実行する。
+
+```bat
+cargo build -p pcdiag
+set PCDIAG_TEST_DELAY_COLLECTOR=event_logs
+set PCDIAG_TEST_DELAY_MS=5000
+target\debug\pcdiag.exe collect --output C:\pcdiag-timeout-test --collector-timeout event_logs=1
+set PCDIAG_TEST_DELAY_COLLECTOR=
+set PCDIAG_TEST_DELAY_MS=
+```
+
+`PCDIAG_TEST_DELAY_COLLECTOR`には正式なコレクター名、`PCDIAG_TEST_DELAY_MS`には1から300,000ミリ秒を指定する。対象ワーカーだけが収集開始前に待機する。
+
+確認事項:
+
+1. `event_logs`が`failed`、理由が`collector_timeout`となる。
+2. `duration_ms`がおおむね1秒以上となる。
+3. 直後の`physical_disks`以降も実行される。
+4. タスクマネージャーまたはProcess Explorerで、停止したワーカーと子孫プロセスが残っていない。
+5. 同じ遅延設定で収集中に`Ctrl+C`を1回押すと、実行中ワーカーが終了し、終了コード130、`.incomplete`、`interruption.log`が中断仕様に従う。

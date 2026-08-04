@@ -166,6 +166,47 @@ pub(crate) fn collect_one(
     })
 }
 
+/// Delays one internal worker for deterministic timeout verification.
+///
+/// The hook is intentionally absent from release builds. It is not a public
+/// collection option and cannot affect distributed release binaries.
+#[cfg(debug_assertions)]
+pub(crate) fn apply_test_delay(name: CollectorName) -> Result<(), String> {
+    let Some(target) = std::env::var_os("PCDIAG_TEST_DELAY_COLLECTOR") else {
+        return Ok(());
+    };
+    let target = target
+        .to_str()
+        .ok_or_else(|| "PCDIAG_TEST_DELAY_COLLECTOR must be Unicode".to_string())?;
+    let milliseconds = std::env::var("PCDIAG_TEST_DELAY_MS")
+        .map_err(|_| "PCDIAG_TEST_DELAY_MS is required when a test collector is set".to_string())?;
+    if let Some(delay) = parse_test_delay(name, target, &milliseconds)? {
+        thread::sleep(delay);
+    }
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn apply_test_delay(_name: CollectorName) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn parse_test_delay(
+    name: CollectorName,
+    target: &str,
+    milliseconds: &str,
+) -> Result<Option<Duration>, String> {
+    let target =
+        parse_collector_name(target).ok_or_else(|| format!("unknown test collector: {target}"))?;
+    let milliseconds = milliseconds
+        .parse::<u64>()
+        .ok()
+        .filter(|value| (1..=300_000).contains(value))
+        .ok_or_else(|| "PCDIAG_TEST_DELAY_MS must be an integer from 1 to 300000".to_string())?;
+    Ok((target == name).then(|| Duration::from_millis(milliseconds)))
+}
+
 pub(crate) fn collect_all<F>(
     event_log_days: u32,
     windows_updates: WindowsUpdateCollectionOptions,
@@ -727,5 +768,20 @@ mod tests {
             "collector_timeout"
         );
         assert_eq!(result.status.collectors[6].name, CollectorName::Gpu);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_delay_only_applies_to_the_selected_collector() {
+        assert_eq!(
+            parse_test_delay(CollectorName::EventLogs, "event_logs", "2500").unwrap(),
+            Some(Duration::from_millis(2_500))
+        );
+        assert_eq!(
+            parse_test_delay(CollectorName::Memory, "event_logs", "2500").unwrap(),
+            None
+        );
+        assert!(parse_test_delay(CollectorName::EventLogs, "unknown", "2500").is_err());
+        assert!(parse_test_delay(CollectorName::EventLogs, "event_logs", "0").is_err());
     }
 }

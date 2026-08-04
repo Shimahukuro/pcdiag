@@ -85,9 +85,7 @@ fn main() -> ExitCode {
             collector,
             event_log_days,
             windows_updates,
-        } => match collector_process::collect_one(collector, event_log_days, windows_updates)
-            .and_then(|output| serde_json::to_writer(std::io::stdout(), &output))
-        {
+        } => match run_internal_collector(collector, event_log_days, windows_updates) {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("pcdiag internal collector: {error}");
@@ -95,6 +93,17 @@ fn main() -> ExitCode {
             }
         },
     }
+}
+
+fn run_internal_collector(
+    collector: pcdiag_core::CollectorName,
+    event_log_days: u32,
+    windows_updates: WindowsUpdateCollectionOptions,
+) -> Result<(), String> {
+    collector_process::apply_test_delay(collector)?;
+    let output = collector_process::collect_one(collector, event_log_days, windows_updates)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(std::io::stdout(), &output).map_err(|error| error.to_string())
 }
 
 fn exit_code_for_interrupted(interrupted: bool) -> ExitCode {
