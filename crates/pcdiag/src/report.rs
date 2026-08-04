@@ -150,7 +150,7 @@ fn render_html(
     let severity = result
         .summary
         .overall_severity
-        .map(severity_text)
+        .map(severity_badge_text)
         .unwrap_or(if collection_is_partial {
             "診断範囲では異常所見なし"
         } else {
@@ -166,10 +166,10 @@ fn render_html(
     .unwrap();
     write!(html, "<section><h2>診断概要</h2><div class=\"grid\"><div class=\"metric\"><span>総合判定</span><b class=\"{}\">{severity}</b></div>", severity_class(result.summary.overall_severity)).unwrap();
     for (label, count) in [
-        ("Critical", result.summary.findings.critical),
-        ("Error", result.summary.findings.error),
-        ("Warning", result.summary.findings.warning),
-        ("Information", result.summary.findings.information),
+        ("[重大] Critical", result.summary.findings.critical),
+        ("[エラー] Error", result.summary.findings.error),
+        ("[警告] Warning", result.summary.findings.warning),
+        ("[情報] Information", result.summary.findings.information),
     ] {
         write!(
             html,
@@ -180,6 +180,9 @@ fn render_html(
     html.push_str("</div></section>");
     if collection_is_partial {
         html.push_str("<section class=\"finding warning\"><h2>情報収集に関する注意</h2><p>一部の情報を取得できなかったため、このレポートには未評価の情報が含まれる可能性があります。診断結果は、取得できた情報と現在の診断規則の範囲に基づきます。</p></section>");
+    }
+    if result.summary.evaluations.not_evaluated > 0 || result.summary.evaluations.failed > 0 {
+        write!(html, "<section class=\"finding warning\"><h2>診断範囲に関する注意</h2><p>未評価 {}件、規則実行失敗 {}件があります。これらはPCの異常重大度には算入されず、総合判定は評価できた診断規則の検出事項だけに基づきます。</p></section>", result.summary.evaluations.not_evaluated, result.summary.evaluations.failed).unwrap();
     }
     render_findings(&mut html, result);
     render_event_logs(&mut html, data, result);
@@ -377,13 +380,20 @@ fn report_days_in_month(year: u32, month: u32) -> u32 {
 }
 
 fn render_event_logs(html: &mut String, data: &Collection, diagnosis: &Diagnosis) {
-    let evaluations: Vec<_> = diagnosis
+    let mut evaluations: Vec<_> = diagnosis
         .evaluations
         .iter()
         .filter(|item| {
             item.category == "event_log" && item.status == RuleEvaluationStatus::Triggered
         })
         .collect();
+    evaluations.sort_by(|left, right| {
+        right
+            .severity
+            .map(Severity::rank)
+            .cmp(&left.severity.map(Severity::rank))
+            .then_with(|| left.rule_id.cmp(&right.rule_id))
+    });
     html.push_str("<section><details open>");
     write!(
         html,
@@ -397,7 +407,9 @@ fn render_event_logs(html: &mut String, data: &Collection, diagnosis: &Diagnosis
     .unwrap();
     html.push_str("<table><thead><tr><th>重大度</th><th>発生時刻</th><th>概要</th><th>ログ名</th><th>対処の目安</th></tr></thead><tbody>");
     for evaluation in &evaluations {
-        let severity = evaluation.severity.unwrap_or(Severity::Information);
+        let Some(severity) = evaluation.severity else {
+            continue;
+        };
         let event = evaluation
             .evidence
             .iter()
@@ -422,7 +434,7 @@ fn render_event_logs(html: &mut String, data: &Collection, diagnosis: &Diagnosis
             html,
             "<tr><td class=\"{}\">{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             severity_class(Some(severity)),
-            severity_text(severity),
+            severity_badge_text(severity),
             escape(occurred_at),
             escape(&evaluation.summary),
             escape(log_name),
@@ -472,13 +484,27 @@ fn event_recommendation_text(code: &str) -> &'static str {
 
 fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
     html.push_str("<section><h2>検出事項</h2>");
-    let mut found = false;
-    for evaluation in diagnosis.evaluations.iter().filter(|item| {
-        item.status == RuleEvaluationStatus::Triggered && item.category != "event_log"
-    }) {
-        found = true;
-        let severity = evaluation.severity.unwrap_or(Severity::Information);
-        write!(html, "<article class=\"finding {}\"><strong>{}</strong> <span class=\"badge {}\">{}</span><p>{}</p>", severity_class(Some(severity)), escape(&evaluation.rule_id), severity_class(Some(severity)), severity_text(severity), escape(&evaluation.summary)).unwrap();
+    let mut evaluations: Vec<_> = diagnosis
+        .evaluations
+        .iter()
+        .filter(|item| {
+            item.status == RuleEvaluationStatus::Triggered
+                && item.category != "event_log"
+                && item.severity.is_some()
+        })
+        .collect();
+    evaluations.sort_by(|left, right| {
+        right
+            .severity
+            .map(Severity::rank)
+            .cmp(&left.severity.map(Severity::rank))
+            .then_with(|| left.rule_id.cmp(&right.rule_id))
+    });
+    for evaluation in &evaluations {
+        let severity = evaluation
+            .severity
+            .expect("triggered evaluations are validated to have a severity");
+        write!(html, "<article class=\"finding {}\"><strong>{}</strong> <span class=\"badge {}\">{}</span><p>{}</p>", severity_class(Some(severity)), escape(&evaluation.rule_id), severity_class(Some(severity)), severity_badge_text(severity), escape(&evaluation.summary)).unwrap();
         if !evaluation.evidence.is_empty() {
             html.push_str("<ul>");
             for evidence in &evaluation.evidence {
@@ -506,7 +532,7 @@ fn render_findings(html: &mut String, diagnosis: &Diagnosis) {
         }
         html.push_str("</article>");
     }
-    if !found {
+    if evaluations.is_empty() {
         html.push_str(
             "<p class=\"passed\">イベントログ以外の診断規則による異常所見はありません。</p>",
         );
@@ -776,12 +802,12 @@ fn escape(value: &str) -> String {
     })
 }
 
-fn severity_text(value: Severity) -> &'static str {
+fn severity_badge_text(value: Severity) -> &'static str {
     match value {
-        Severity::Critical => "重大",
-        Severity::Error => "エラー",
-        Severity::Warning => "警告",
-        Severity::Information => "情報",
+        Severity::Critical => "[重大]",
+        Severity::Error => "[エラー]",
+        Severity::Warning => "[警告]",
+        Severity::Information => "[情報]",
     }
 }
 fn severity_class(value: Option<Severity>) -> &'static str {
@@ -901,7 +927,7 @@ impl From<pcdiag_core::ManifestValidationErrors> for ReportError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcdiag_core::{ArtifactFile, CollectionStatus, diagnose_collection};
+    use pcdiag_core::{ArtifactFile, CollectionStatus, RuleEvaluation, diagnose_collection};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -982,6 +1008,57 @@ mod tests {
         assert!(html.contains("pcdiagは成果物を自動削除しません。"));
         assert!(html.contains(".artifact-notice{"));
         assert!(html.contains("section,.artifact-notice{break-inside:avoid"));
+    }
+
+    #[test]
+    fn renders_findings_in_severity_then_rule_id_order_with_text_labels() {
+        let (_, mut loaded_diagnosis) = loaded_inputs();
+        let template = loaded_diagnosis.diagnosis.evaluations[0].clone();
+        loaded_diagnosis.diagnosis.evaluations = [
+            ("rule.warning.z", Severity::Warning),
+            ("rule.critical", Severity::Critical),
+            ("rule.information", Severity::Information),
+            ("rule.warning.a", Severity::Warning),
+            ("rule.error", Severity::Error),
+        ]
+        .into_iter()
+        .map(|(rule_id, severity)| RuleEvaluation {
+            rule_id: rule_id.into(),
+            category: "test".into(),
+            status: RuleEvaluationStatus::Triggered,
+            severity: Some(severity),
+            ..template.clone()
+        })
+        .collect();
+
+        let mut html = String::new();
+        render_findings(&mut html, &loaded_diagnosis.diagnosis);
+
+        let positions = [
+            "rule.critical",
+            "rule.error",
+            "rule.warning.a",
+            "rule.warning.z",
+            "rule.information",
+        ]
+        .map(|rule_id| html.find(rule_id).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        for label in ["[重大]", "[エラー]", "[警告]", "[情報]"] {
+            assert!(html.contains(label));
+        }
+    }
+
+    #[test]
+    fn reports_incomplete_evaluation_coverage_separately_from_severity() {
+        let (collection, mut diagnosis) = loaded_inputs();
+        diagnosis.diagnosis.summary.evaluations.not_evaluated = 2;
+        diagnosis.diagnosis.summary.evaluations.failed = 1;
+
+        let html = render_html(&collection, &diagnosis);
+
+        assert!(html.contains("診断範囲に関する注意"));
+        assert!(html.contains("未評価 2件、規則実行失敗 1件"));
+        assert!(html.contains("PCの異常重大度には算入されず"));
     }
 
     #[test]

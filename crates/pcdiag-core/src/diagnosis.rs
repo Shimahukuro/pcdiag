@@ -57,6 +57,30 @@ pub enum Severity {
     Information,
 }
 
+impl Severity {
+    /// Returns the normative severity order used by summaries, validation, and reports.
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Information => 1,
+            Self::Warning => 2,
+            Self::Error => 3,
+            Self::Critical => 4,
+        }
+    }
+}
+
+#[cfg(test)]
+mod severity_tests {
+    use super::Severity;
+
+    #[test]
+    fn severity_rank_follows_the_diagnostic_specification() {
+        assert!(Severity::Critical.rank() > Severity::Error.rank());
+        assert!(Severity::Error.rank() > Severity::Warning.rank());
+        assert!(Severity::Warning.rank() > Severity::Information.rank());
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RuleEvaluation {
     pub rule_id: String,
