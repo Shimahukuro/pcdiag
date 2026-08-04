@@ -8,9 +8,9 @@ use pcdiag_core::{
     ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, CollectorStatus, ToolInfo,
     display_id, sha256_hex,
 };
-use pcdiag_windows::{WindowsUpdateCollectionOptions, collect_all_cancellable};
+use pcdiag_windows::WindowsUpdateCollectionOptions;
 
-use crate::interrupt;
+use crate::{collector_process::CollectorTimeouts, interrupt};
 
 const MANIFEST_SCHEMA_VERSION: &str = "1.0";
 const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
@@ -18,6 +18,7 @@ const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
 pub fn collect_to_bundle(
     output_root: &Path,
     windows_update_options: WindowsUpdateCollectionOptions,
+    collector_timeouts: &CollectorTimeouts,
 ) -> Result<PathBuf, BundleError> {
     interrupt::check("collect")?;
     let started = Instant::now();
@@ -40,16 +41,20 @@ pub fn collect_to_bundle(
         }
         fs::create_dir(&incomplete_directory)?;
         interrupt::check_with_log("collect", &incomplete_directory)?;
-        let result = match collect_all_cancellable(
+        let result = match crate::collector_process::collect_all(
             configured_event_log_days()?,
             windows_update_options,
+            collector_timeouts,
             interrupt::is_requested,
         ) {
             Ok(result) => result,
-            Err(_) => {
+            Err(crate::collector_process::CollectionRunError::Cancelled) => {
                 return Err(interrupt::check_with_log("collect", &incomplete_directory)
                     .unwrap_err()
                     .into());
+            }
+            Err(crate::collector_process::CollectionRunError::Protocol(message)) => {
+                return Err(BundleError::CollectorProtocol(message));
             }
         };
         interrupt::check_with_log("collect", &incomplete_directory)?;
@@ -193,6 +198,7 @@ pub enum BundleError {
     ManifestValidation(pcdiag_core::ManifestValidationErrors),
     Platform(String),
     Configuration(String),
+    CollectorProtocol(String),
     Collision,
 }
 
@@ -206,6 +212,9 @@ impl std::fmt::Display for BundleError {
             Self::ManifestValidation(error) => write!(formatter, "マニフェストが不正です: {error}"),
             Self::Platform(message) => formatter.write_str(message),
             Self::Configuration(message) => formatter.write_str(message),
+            Self::CollectorProtocol(message) => {
+                write!(formatter, "コレクター結果を統合できませんでした: {message}")
+            }
             Self::Collision => {
                 formatter.write_str("一意なセッションディレクトリを作成できませんでした")
             }

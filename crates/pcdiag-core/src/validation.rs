@@ -778,20 +778,41 @@ impl Collection {
                 ),
                 ("/event_logs/security", self.event_logs.security.is_none()),
             ];
-            if collector.status == CollectorStatus::Success
-                && (missing.iter().any(|(_, value)| *value)
-                    || !collector.fields.is_empty()
-                    || !collector.messages.is_empty())
-            {
-                push_error(
-                    &mut errors,
-                    "/collectors/event_logs/status",
-                    "successful event log collector must not contain failures",
-                );
-            }
-            for (path, is_missing) in missing {
-                if is_missing && !collector.fields.iter().any(|field| field.path == path) {
-                    push_error(&mut errors, path, "missing log requires a field result");
+            match collector.status {
+                CollectorStatus::Success => {
+                    if missing.iter().any(|(_, value)| *value)
+                        || !collector.fields.is_empty()
+                        || !collector.messages.is_empty()
+                    {
+                        push_error(
+                            &mut errors,
+                            "/collectors/event_logs/status",
+                            "successful event log collector must not contain failures",
+                        );
+                    }
+                }
+                CollectorStatus::Partial => {
+                    for (path, is_missing) in missing {
+                        if is_missing && !collector.fields.iter().any(|field| field.path == path) {
+                            push_error(&mut errors, path, "missing log requires a field result");
+                        }
+                    }
+                }
+                CollectorStatus::Skipped | CollectorStatus::Failed => {
+                    if missing.iter().any(|(_, value)| !*value) {
+                        push_error(
+                            &mut errors,
+                            "/event_logs",
+                            "skipped or failed event log collector requires all logs to be null",
+                        );
+                    }
+                    if collector.messages.is_empty() {
+                        push_error(
+                            &mut errors,
+                            "/collectors/event_logs/messages",
+                            "skipped or failed event log collector must include a reason",
+                        );
+                    }
                 }
             }
         }

@@ -1,8 +1,10 @@
 mod bundle;
+mod collector_process;
 mod diagnose;
 mod interrupt;
 mod report;
 
+use collector_process::CollectorTimeouts;
 use pcdiag_windows::WindowsUpdateCollectionOptions;
 use std::{
     ffi::OsString,
@@ -30,7 +32,8 @@ fn main() -> ExitCode {
         Command::DefaultPipeline {
             output,
             windows_updates,
-        } => match run_default_pipeline(&output, windows_updates) {
+            collector_timeouts,
+        } => match run_default_pipeline(&output, windows_updates, collector_timeouts) {
             Ok(path) => {
                 println!("{}", path.display());
                 ExitCode::SUCCESS
@@ -43,7 +46,8 @@ fn main() -> ExitCode {
         Command::Collect {
             output,
             windows_updates,
-        } => match bundle::collect_to_bundle(&output, windows_updates) {
+            collector_timeouts,
+        } => match bundle::collect_to_bundle(&output, windows_updates, &collector_timeouts) {
             Ok(path) => {
                 println!("{}", path.display());
                 ExitCode::SUCCESS
@@ -77,7 +81,29 @@ fn main() -> ExitCode {
             print_help();
             ExitCode::SUCCESS
         }
+        Command::InternalCollect {
+            collector,
+            event_log_days,
+            windows_updates,
+        } => match run_internal_collector(collector, event_log_days, windows_updates) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("pcdiag internal collector: {error}");
+                ExitCode::from(1)
+            }
+        },
     }
+}
+
+fn run_internal_collector(
+    collector: pcdiag_core::CollectorName,
+    event_log_days: u32,
+    windows_updates: WindowsUpdateCollectionOptions,
+) -> Result<(), String> {
+    collector_process::apply_test_delay(collector)?;
+    let output = collector_process::collect_one(collector, event_log_days, windows_updates)
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(std::io::stdout(), &output).map_err(|error| error.to_string())
 }
 
 fn exit_code_for_interrupted(interrupted: bool) -> ExitCode {
@@ -97,10 +123,12 @@ enum Command {
     DefaultPipeline {
         output: PathBuf,
         windows_updates: WindowsUpdateCollectionOptions,
+        collector_timeouts: CollectorTimeouts,
     },
     Collect {
         output: PathBuf,
         windows_updates: WindowsUpdateCollectionOptions,
+        collector_timeouts: CollectorTimeouts,
     },
     Diagnose {
         output: PathBuf,
@@ -109,11 +137,16 @@ enum Command {
         output: PathBuf,
     },
     Help,
+    InternalCollect {
+        collector: pcdiag_core::CollectorName,
+        event_log_days: u32,
+        windows_updates: WindowsUpdateCollectionOptions,
+    },
 }
 
 impl Command {
     fn handles_artifacts(&self) -> bool {
-        !matches!(self, Self::Help)
+        !matches!(self, Self::Help | Self::InternalCollect { .. })
     }
 }
 
@@ -123,6 +156,7 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         return Ok(Command::DefaultPipeline {
             output: PathBuf::from("."),
             windows_updates: WindowsUpdateCollectionOptions::default(),
+            collector_timeouts: CollectorTimeouts::default(),
         });
     };
     if command == "--help" || command == "-h" {
@@ -131,11 +165,16 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         }
         return Ok(Command::Help);
     }
+    if command == "--internal-collect" {
+        return parse_internal_collect(&arguments);
+    }
     if command.to_string_lossy().starts_with("--") {
-        let (output, windows_updates) = parse_collection_options(&arguments, false)?;
+        let (output, windows_updates, collector_timeouts) =
+            parse_collection_options(&arguments, false)?;
         return Ok(Command::DefaultPipeline {
             output,
             windows_updates,
+            collector_timeouts,
         });
     }
     if command != "collect" && command != "diagnose" && command != "report" {
@@ -145,10 +184,12 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
         ));
     }
     if command == "collect" {
-        let (output, windows_updates) = parse_collection_options(&arguments[1..], true)?;
+        let (output, windows_updates, collector_timeouts) =
+            parse_collection_options(&arguments[1..], true)?;
         return Ok(Command::Collect {
             output,
             windows_updates,
+            collector_timeouts,
         });
     }
     let Some(option) = arguments.get(1) else {
@@ -184,9 +225,10 @@ fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, 
 fn parse_collection_options(
     arguments: &[OsString],
     output_required: bool,
-) -> Result<(PathBuf, WindowsUpdateCollectionOptions), String> {
+) -> Result<(PathBuf, WindowsUpdateCollectionOptions, CollectorTimeouts), String> {
     let mut output = None;
     let mut options = WindowsUpdateCollectionOptions::default();
+    let mut collector_timeouts = CollectorTimeouts::default();
     let mut index = 0;
     while index < arguments.len() {
         let option = &arguments[index];
@@ -220,6 +262,7 @@ fn parse_collection_options(
             "--windows-update-max-entries" => {
                 options.max_entries = parse_optional_limit(value, 100_000, option)?;
             }
+            "--collector-timeout" => collector_timeouts.set_from_cli(value)?,
             _ => {
                 return Err(format!(
                     "未対応のオプションです: {}",
@@ -232,7 +275,47 @@ fn parse_collection_options(
     if output_required && output.is_none() {
         return Err("collectには--output <出力先ディレクトリ>が必要です".into());
     }
-    Ok((output.unwrap_or_else(|| PathBuf::from(".")), options))
+    Ok((
+        output.unwrap_or_else(|| PathBuf::from(".")),
+        options,
+        collector_timeouts,
+    ))
+}
+
+fn parse_internal_collect(arguments: &[OsString]) -> Result<Command, String> {
+    if arguments.len() != 8
+        || arguments[2] != "--event-log-days"
+        || arguments[4] != "--windows-update-days"
+        || arguments[6] != "--windows-update-max-entries"
+    {
+        return Err("内部コレクターの引数が不正です".into());
+    }
+    let collector = arguments[1]
+        .to_str()
+        .and_then(collector_process::parse_collector_name)
+        .ok_or_else(|| "内部コレクター名が不正です".to_string())?;
+    let event_log_days = arguments[3]
+        .to_str()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| (1..=3_650).contains(value))
+        .ok_or_else(|| "内部イベントログ取得日数が不正です".to_string())?;
+    let windows_updates = WindowsUpdateCollectionOptions {
+        lookback_days: parse_optional_limit(
+            &arguments[5],
+            3_650,
+            &OsString::from("--windows-update-days"),
+        )?,
+        max_entries: parse_optional_limit(
+            &arguments[7],
+            100_000,
+            &OsString::from("--windows-update-max-entries"),
+        )?,
+    };
+    Ok(Command::InternalCollect {
+        collector,
+        event_log_days,
+        windows_updates,
+    })
 }
 
 fn parse_optional_limit(
@@ -259,7 +342,7 @@ fn parse_optional_limit(
 
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag [収集オプション]\n  pcdiag collect --output <出力先ディレクトリ> [収集オプション]\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\n収集オプション:\n  --output <パス>                         出力先ディレクトリ\n  --windows-update-days <日数|all>       Windows Update履歴の取得期間（既定: 180日）\n  --windows-update-max-entries <件数|all> 最大取得件数（既定: 1000件）\n  --windows-update-all                   Windows Updateの全履歴を取得\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag [収集オプション]\n  pcdiag collect --output <出力先ディレクトリ> [収集オプション]\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\n収集オプション:\n  --output <パス>                         出力先ディレクトリ\n  --collector-timeout <名前>=<秒>        コレクターの制限時間（1～3600秒、複数指定可）\n  --windows-update-days <日数|all>       Windows Update履歴の取得期間（既定: 180日）\n  --windows-update-max-entries <件数|all> 最大取得件数（既定: 1000件）\n  --windows-update-all                   Windows Updateの全履歴を取得\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -267,11 +350,13 @@ fn print_help() {
 fn run_default_pipeline(
     output_root: &Path,
     windows_updates: WindowsUpdateCollectionOptions,
+    collector_timeouts: CollectorTimeouts,
 ) -> Result<PathBuf, PipelineError> {
     run_pipeline(
         output_root,
         |output| {
-            bundle::collect_to_bundle(output, windows_updates).map_err(PipelineError::from_bundle)
+            bundle::collect_to_bundle(output, windows_updates, &collector_timeouts)
+                .map_err(PipelineError::from_bundle)
         },
         |session| {
             diagnose::diagnose_bundle(session)
@@ -372,6 +457,7 @@ mod tests {
             Command::Collect {
                 output: PathBuf::from("results"),
                 windows_updates: WindowsUpdateCollectionOptions::default(),
+                collector_timeouts: CollectorTimeouts::default(),
             }
         );
     }
@@ -382,10 +468,12 @@ mod tests {
             Command::DefaultPipeline {
                 output: PathBuf::from("."),
                 windows_updates: WindowsUpdateCollectionOptions::default(),
+                collector_timeouts: CollectorTimeouts::default(),
             },
             Command::Collect {
                 output: PathBuf::from("results"),
                 windows_updates: WindowsUpdateCollectionOptions::default(),
+                collector_timeouts: CollectorTimeouts::default(),
             },
             Command::Diagnose {
                 output: PathBuf::from("session"),
@@ -414,6 +502,7 @@ mod tests {
             Command::DefaultPipeline {
                 output: PathBuf::from("."),
                 windows_updates: WindowsUpdateCollectionOptions::default(),
+                collector_timeouts: CollectorTimeouts::default(),
             }
         );
     }
@@ -440,6 +529,7 @@ mod tests {
             Command::DefaultPipeline {
                 output: PathBuf::from("D:\\pcdiag-results"),
                 windows_updates: WindowsUpdateCollectionOptions::default(),
+                collector_timeouts: CollectorTimeouts::default(),
             }
         );
         assert!(parse_args(["--output".into()]).is_err());
@@ -464,6 +554,7 @@ mod tests {
                     lookback_days: Some(90),
                     max_entries: Some(500),
                 },
+                collector_timeouts: CollectorTimeouts::default(),
             }
         );
         assert_eq!(
@@ -480,6 +571,7 @@ mod tests {
                     lookback_days: None,
                     max_entries: None,
                 },
+                collector_timeouts: CollectorTimeouts::default(),
             }
         );
         assert!(
@@ -491,6 +583,38 @@ mod tests {
                 "0".into(),
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_collector_timeout_overrides() {
+        let command = parse_args([
+            "collect".into(),
+            "--output".into(),
+            "results".into(),
+            "--collector-timeout".into(),
+            "memory=25".into(),
+            "--collector-timeout".into(),
+            "event_logs=300".into(),
+        ])
+        .unwrap();
+        let Command::Collect {
+            collector_timeouts, ..
+        } = command
+        else {
+            panic!("collect command expected");
+        };
+        assert_eq!(
+            collector_timeouts
+                .timeout_for(pcdiag_core::CollectorName::Memory)
+                .as_secs(),
+            25
+        );
+        assert_eq!(
+            collector_timeouts
+                .timeout_for(pcdiag_core::CollectorName::EventLogs)
+                .as_secs(),
+            300
         );
     }
 

@@ -16,6 +16,7 @@ PC修理や保守の現場で、インストールせずに1コマンドで診�
 - 収集結果に対する診断規則の実行
 - 外部通信や外部リソースを使用しない単一HTMLレポートの生成
 - マニフェスト、ファイルサイズ、SHA-256による成果物の整合性検証
+- コレクターごとのタイムアウトと、失敗後の後続収集
 
 コンピューター名、ユーザー名、ネットワークアドレス、プロダクトキーは直接の収集対象としていません。ただし、`collection.json`にはWindowsイベントログ、デバイスインスタンスID、モデル名、ドライバー情報などが含まれます。イベント本文にはアカウント名、パス、端末名などが含まれる場合があります。収集成果物は機密情報を含む可能性のある診断資料として扱ってください。HTMLレポートにはデバイスインスタンスIDを表示しません。
 
@@ -52,6 +53,14 @@ pcdiag.exe collect --output D:\pcdiag-results
 pcdiag.exe diagnose --output D:\pcdiag-results\pcdiag-YYYYMMDD-HHMMSS-ID
 pcdiag.exe report --output D:\pcdiag-results\pcdiag-YYYYMMDD-HHMMSS-ID
 ```
+
+コレクターの制限時間は個別に変更できます。
+
+```powershell
+pcdiag.exe collect --output D:\pcdiag-results --collector-timeout smart=60
+```
+
+既定値とタイムアウト時の扱いは[`docs/collector-timeouts.md`](docs/collector-timeouts.md)を参照してください。
 
 ## 出力
 

@@ -28,7 +28,7 @@ collect → diagnose → report
 
 Windowsコンソールで`Ctrl+C`または`Ctrl+Break`を受けた場合、実行中の処理へ協調的な中断を要求する。コンソール制御ハンドラーは中断状態の更新だけを行い、ファイル操作やログ出力は通常の処理へ戻ってから行う。
 
-最初の中断要求では、実行中のWindows API呼び出しや外部プロセスが戻った後、次の中断確認点で処理を停止する。
+最初の中断要求では、`collect`中の実行中コレクターワーカーを終了する。`diagnose`と`report`は次の中断確認点で処理を停止する。
 
 - `collect`: 各コレクターの実行前後
 - `diagnose`: 入力検証後、診断後、成果物の各書き込み前、成果物確定前
@@ -86,3 +86,9 @@ pcdiag.exe collect --output results --windows-update-all
 ```
 
 期間または件数により履歴を打ち切った場合は、`status.json`のWindows Updateコレクターへ切り捨て理由を記録する。
+
+## コレクターのタイムアウト
+
+引数なしの一括実行と`collect`では、`--collector-timeout <collector>=<秒>`を繰り返し指定して、コレクターごとの既定時間を上書きできる。秒数は1から3,600とし、同じコレクターを複数回指定した場合は引数エラーとする。
+
+タイムアウトしたコレクターは`failed`、理由コード`collector_timeout`として`status.json`へ記録し、後続コレクターを継続する。実行方式、既定値、状態および実機確認方法は[`collector-timeouts.md`](collector-timeouts.md)を参照する。
