@@ -1265,7 +1265,7 @@ fn summarize(evaluations: &[RuleEvaluation]) -> DiagnosisSummary {
         warning: 0,
         information: 0,
     };
-    let mut overall = None;
+    let mut overall: Option<Severity> = None;
     for evaluation in evaluations {
         match evaluation.status {
             RuleEvaluationStatus::Passed => counts.passed += 1,
@@ -1284,7 +1284,7 @@ fn summarize(evaluations: &[RuleEvaluation]) -> DiagnosisSummary {
                 Severity::Information => findings.information += 1,
             }
             if match overall {
-                Some(current) => severity_rank(severity) > severity_rank(current),
+                Some(current) => severity.rank() > current.rank(),
                 None => true,
             } {
                 overall = Some(severity);
@@ -1295,15 +1295,6 @@ fn summarize(evaluations: &[RuleEvaluation]) -> DiagnosisSummary {
         overall_severity: overall,
         evaluations: counts,
         findings,
-    }
-}
-
-fn severity_rank(severity: Severity) -> u8 {
-    match severity {
-        Severity::Information => 1,
-        Severity::Warning => 2,
-        Severity::Error => 3,
-        Severity::Critical => 4,
     }
 }
 

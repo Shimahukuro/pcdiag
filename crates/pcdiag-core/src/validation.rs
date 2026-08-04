@@ -1583,7 +1583,7 @@ impl Diagnosis {
         let mut error_findings = 0;
         let mut warning = 0;
         let mut information = 0;
-        let mut highest_severity = None;
+        let mut highest_severity: Option<Severity> = None;
 
         for (evaluation_index, evaluation) in self.evaluations.iter().enumerate() {
             let base = format!("/evaluations/{evaluation_index}");
@@ -1611,6 +1611,14 @@ impl Diagnosis {
                     "triggered evaluations must have a severity",
                 );
             }
+            if evaluation.status != RuleEvaluationStatus::Triggered && evaluation.severity.is_some()
+            {
+                push_error(
+                    &mut errors,
+                    format!("{base}/severity"),
+                    "only triggered evaluations may have a severity",
+                );
+            }
             if evaluation.status == RuleEvaluationStatus::Triggered
                 && let Some(severity) = evaluation.severity
             {
@@ -1621,7 +1629,7 @@ impl Diagnosis {
                     Severity::Information => information += 1,
                 }
                 if highest_severity
-                    .map(|current| severity_rank(severity) > severity_rank(current))
+                    .map(|current| severity.rank() > current.rank())
                     .unwrap_or(true)
                 {
                     highest_severity = Some(severity);
@@ -1716,15 +1724,6 @@ impl Diagnosis {
         }
 
         finish(errors)
-    }
-}
-
-fn severity_rank(severity: Severity) -> u8 {
-    match severity {
-        Severity::Information => 1,
-        Severity::Warning => 2,
-        Severity::Error => 3,
-        Severity::Critical => 4,
     }
 }
 
@@ -2096,6 +2095,23 @@ mod tests {
         memory_diagnosis()
             .validate_against(&complete_collection())
             .unwrap();
+    }
+
+    #[test]
+    fn non_triggered_evaluation_must_not_have_a_severity() {
+        let mut diagnosis = memory_diagnosis();
+        diagnosis.evaluations[0].status = RuleEvaluationStatus::Passed;
+
+        let errors = diagnosis
+            .validate_against(&complete_collection())
+            .unwrap_err();
+
+        assert!(errors.errors().iter().any(|error| {
+            error.path == "/evaluations/0/severity"
+                && error
+                    .message
+                    .contains("only triggered evaluations may have a severity")
+        }));
     }
 
     fn complete_collection() -> Collection {
