@@ -9,16 +9,23 @@ use pcdiag_core::{
     ToolInfo, diagnose_collection, load_collection_artifact,
 };
 
-use crate::bundle::{self, artifact_file, pretty_json, write_new};
+use crate::{
+    bundle::{self, artifact_file, pretty_json, write_new},
+    interrupt,
+};
 
 pub fn diagnose_bundle(session_directory: &Path) -> Result<PathBuf, DiagnoseError> {
+    interrupt::check("diagnose")?;
     let started = Instant::now();
     let started_at = bundle::platform::utc_timestamp()?;
     let observed_utc_offset_minutes = bundle::platform::utc_offset_minutes()?;
     let collection = load_collection_artifact(&session_directory.join("collection"))?;
+    interrupt::check("diagnose")?;
     let artifact_id = unique_artifact_id(&collection)?;
     let diagnosis = diagnose_collection(&collection.collection);
+    interrupt::check("diagnose")?;
     diagnosis.validate_against(&collection.collection)?;
+    interrupt::check("diagnose")?;
     let completed_at = bundle::platform::utc_timestamp()?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     write_diagnosis(
@@ -70,7 +77,9 @@ fn write_diagnosis(
         return Err(DiagnoseError::IncompleteExists(incomplete_directory));
     }
     fs::create_dir(&incomplete_directory)?;
+    interrupt::check_with_log("diagnose", &incomplete_directory)?;
     let diagnosis_bytes = pretty_json(&diagnosis)?;
+    interrupt::check_with_log("diagnose", &incomplete_directory)?;
     write_new(
         &incomplete_directory.join("diagnosis.json"),
         &diagnosis_bytes,
@@ -106,16 +115,19 @@ fn write_diagnosis(
         files: vec![artifact_file("diagnosis.json", &diagnosis_bytes)],
     };
     manifest.validate()?;
+    interrupt::check_with_log("diagnose", &incomplete_directory)?;
     write_new(
         &incomplete_directory.join("manifest.json"),
         &pretty_json(&manifest)?,
     )?;
+    interrupt::check_with_log("diagnose", &incomplete_directory)?;
     fs::rename(&incomplete_directory, &final_directory)?;
     Ok(final_directory)
 }
 
 #[derive(Debug)]
 pub enum DiagnoseError {
+    Interrupted(interrupt::Interrupted),
     Io(io::Error),
     Json(serde_json::Error),
     Bundle(bundle::BundleError),
@@ -130,6 +142,7 @@ pub enum DiagnoseError {
 impl std::fmt::Display for DiagnoseError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interrupted(error) => error.fmt(formatter),
             Self::Io(error) => write!(formatter, "ファイル操作に失敗しました: {error}"),
             Self::Json(error) => write!(formatter, "JSON生成に失敗しました: {error}"),
             Self::Bundle(error) => write!(formatter, "実行環境情報を取得できませんでした: {error}"),
@@ -154,6 +167,19 @@ impl std::fmt::Display for DiagnoseError {
 }
 
 impl std::error::Error for DiagnoseError {}
+
+impl DiagnoseError {
+    pub(crate) fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted(_))
+            || matches!(self, Self::Bundle(error) if error.is_interrupted())
+    }
+}
+
+impl From<interrupt::Interrupted> for DiagnoseError {
+    fn from(value: interrupt::Interrupted) -> Self {
+        Self::Interrupted(value)
+    }
+}
 
 impl From<io::Error> for DiagnoseError {
     fn from(value: io::Error) -> Self {

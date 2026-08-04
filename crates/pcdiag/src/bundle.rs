@@ -8,7 +8,9 @@ use pcdiag_core::{
     ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, CollectorStatus, ToolInfo,
     display_id, sha256_hex,
 };
-use pcdiag_windows::{WindowsUpdateCollectionOptions, collect_all};
+use pcdiag_windows::{WindowsUpdateCollectionOptions, collect_all_cancellable};
+
+use crate::interrupt;
 
 const MANIFEST_SCHEMA_VERSION: &str = "1.0";
 const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
@@ -17,6 +19,7 @@ pub fn collect_to_bundle(
     output_root: &Path,
     windows_update_options: WindowsUpdateCollectionOptions,
 ) -> Result<PathBuf, BundleError> {
+    interrupt::check("collect")?;
     let started = Instant::now();
     let started_at = platform::utc_timestamp()?;
     let observed_utc_offset_minutes = platform::utc_offset_minutes()?;
@@ -36,8 +39,22 @@ pub fn collect_to_bundle(
             continue;
         }
         fs::create_dir(&incomplete_directory)?;
-        let result = collect_all(configured_event_log_days()?, windows_update_options);
+        interrupt::check_with_log("collect", &incomplete_directory)?;
+        let result = match collect_all_cancellable(
+            configured_event_log_days()?,
+            windows_update_options,
+            interrupt::is_requested,
+        ) {
+            Ok(result) => result,
+            Err(_) => {
+                return Err(interrupt::check_with_log("collect", &incomplete_directory)
+                    .unwrap_err()
+                    .into());
+            }
+        };
+        interrupt::check_with_log("collect", &incomplete_directory)?;
         result.collection.validate_with_status(&result.status)?;
+        interrupt::check_with_log("collect", &incomplete_directory)?;
         let completed_at = platform::utc_timestamp()?;
         let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         return write_bundle(
@@ -88,14 +105,17 @@ fn write_bundle(
     result: pcdiag_windows::CompleteCollectionResult,
     timing: ManifestTiming,
 ) -> Result<PathBuf, BundleError> {
+    interrupt::check_with_log("collect", incomplete_directory)?;
     let collection_directory = incomplete_directory.join("collection");
     fs::create_dir(&collection_directory)?;
     let collection_bytes = pretty_json(&result.collection)?;
     let status_bytes = pretty_json(&result.status)?;
+    interrupt::check_with_log("collect", incomplete_directory)?;
     write_new(
         &collection_directory.join("collection.json"),
         &collection_bytes,
     )?;
+    interrupt::check_with_log("collect", incomplete_directory)?;
     write_new(&collection_directory.join("status.json"), &status_bytes)?;
 
     let artifact_status = if result
@@ -131,7 +151,9 @@ fn write_bundle(
     };
     manifest.validate()?;
     let manifest_bytes = pretty_json(&manifest)?;
+    interrupt::check_with_log("collect", incomplete_directory)?;
     write_new(&collection_directory.join("manifest.json"), &manifest_bytes)?;
+    interrupt::check_with_log("collect", incomplete_directory)?;
     fs::rename(incomplete_directory, final_directory)?;
     Ok(final_directory.to_owned())
 }
@@ -164,6 +186,7 @@ pub(crate) fn artifact_file(path: &str, bytes: &[u8]) -> ArtifactFile {
 
 #[derive(Debug)]
 pub enum BundleError {
+    Interrupted(interrupt::Interrupted),
     Io(io::Error),
     Json(serde_json::Error),
     CollectionValidation(pcdiag_core::ValidationErrors),
@@ -176,6 +199,7 @@ pub enum BundleError {
 impl std::fmt::Display for BundleError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interrupted(error) => error.fmt(formatter),
             Self::Io(error) => write!(formatter, "ファイル操作に失敗しました: {error}"),
             Self::Json(error) => write!(formatter, "JSON生成に失敗しました: {error}"),
             Self::CollectionValidation(error) => write!(formatter, "収集結果が不正です: {error}"),
@@ -190,6 +214,18 @@ impl std::fmt::Display for BundleError {
 }
 
 impl std::error::Error for BundleError {}
+
+impl BundleError {
+    pub(crate) fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted(_))
+    }
+}
+
+impl From<interrupt::Interrupted> for BundleError {
+    fn from(value: interrupt::Interrupted) -> Self {
+        Self::Interrupted(value)
+    }
+}
 
 impl From<io::Error> for BundleError {
     fn from(value: io::Error) -> Self {
@@ -364,7 +400,7 @@ mod tests {
         let incomplete = root.join("session.incomplete");
         let final_directory = root.join("session");
         fs::create_dir(&incomplete).unwrap();
-        let result = collect_all(30, WindowsUpdateCollectionOptions::default());
+        let result = pcdiag_windows::collect_all(30, WindowsUpdateCollectionOptions::default());
         let written = write_bundle(
             &incomplete,
             &final_directory,

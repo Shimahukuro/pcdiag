@@ -14,16 +14,23 @@ use pcdiag_core::{
     load_diagnosis_artifact, sha256_hex,
 };
 
-use crate::bundle::{self, pretty_json, write_new};
+use crate::{
+    bundle::{self, pretty_json, write_new},
+    interrupt,
+};
 
 pub fn generate_report(session_directory: &Path) -> Result<PathBuf, ReportError> {
+    interrupt::check("report")?;
     let started = Instant::now();
     let started_at = bundle::platform::utc_timestamp()?;
     let observed_utc_offset_minutes = bundle::platform::utc_offset_minutes()?;
     let collection = load_collection_artifact(&session_directory.join("collection"))?;
+    interrupt::check("report")?;
     let diagnosis = load_diagnosis_artifact(&session_directory.join("diagnosis"), &collection)?;
+    interrupt::check("report")?;
     let artifact_id = unique_artifact_id(&collection, &diagnosis)?;
     let html = render_html(&collection, &diagnosis);
+    interrupt::check("report")?;
     let completed_at = bundle::platform::utc_timestamp()?;
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     write_report(
@@ -81,6 +88,7 @@ fn write_report(
         return Err(ReportError::IncompleteExists(incomplete_directory));
     }
     fs::create_dir(&incomplete_directory)?;
+    interrupt::check_with_log("report", &incomplete_directory)?;
     write_new(&incomplete_directory.join("report.html"), html)?;
     let manifest = ArtifactManifest {
         manifest_schema_version: "1.0".into(),
@@ -115,10 +123,12 @@ fn write_report(
         }],
     };
     manifest.validate()?;
+    interrupt::check_with_log("report", &incomplete_directory)?;
     write_new(
         &incomplete_directory.join("manifest.json"),
         &pretty_json(&manifest)?,
     )?;
+    interrupt::check_with_log("report", &incomplete_directory)?;
     fs::rename(&incomplete_directory, &final_directory)?;
     Ok(final_directory)
 }
@@ -814,6 +824,7 @@ fn format_bytes(value: Option<u64>) -> String {
 
 #[derive(Debug)]
 pub enum ReportError {
+    Interrupted(interrupt::Interrupted),
     Io(io::Error),
     Json(serde_json::Error),
     Bundle(bundle::BundleError),
@@ -827,6 +838,7 @@ pub enum ReportError {
 impl std::fmt::Display for ReportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Interrupted(error) => error.fmt(f),
             Self::Io(e) => write!(f, "ファイル操作に失敗しました: {e}"),
             Self::Json(e) => write!(f, "JSON生成に失敗しました: {e}"),
             Self::Bundle(e) => write!(f, "実行環境情報を取得できませんでした: {e}"),
@@ -849,6 +861,17 @@ impl std::fmt::Display for ReportError {
     }
 }
 impl std::error::Error for ReportError {}
+impl ReportError {
+    pub(crate) fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted(_))
+            || matches!(self, Self::Bundle(error) if error.is_interrupted())
+    }
+}
+impl From<interrupt::Interrupted> for ReportError {
+    fn from(value: interrupt::Interrupted) -> Self {
+        Self::Interrupted(value)
+    }
+}
 impl From<io::Error> for ReportError {
     fn from(v: io::Error) -> Self {
         Self::Io(v)
