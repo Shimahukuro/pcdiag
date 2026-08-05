@@ -80,6 +80,17 @@ fn unknown_collector_status_is_rejected() {
 }
 
 #[test]
+fn unknown_object_fields_are_ignored_and_not_preserved() {
+    let mut value: Value = serde_json::from_str(SUCCESS_COLLECTION).unwrap();
+    value["future_optional_field"] = json!({ "enabled": true });
+
+    let collection: Collection = serde_json::from_value(value).unwrap();
+    let serialized = serde_json::to_value(collection).unwrap();
+
+    assert!(serialized.get("future_optional_field").is_none());
+}
+
+#[test]
 fn load_percent_outside_the_valid_range_is_rejected_by_validation() {
     let mut value: Value = serde_json::from_str(SUCCESS_COLLECTION).unwrap();
     value["memory"]["physical"]["load_percent"] = json!(101.0);

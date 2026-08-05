@@ -2,6 +2,33 @@ use std::{collections::HashSet, fmt};
 
 use serde::{Deserialize, Serialize};
 
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: &str = "1.0";
+pub const CURRENT_ARTIFACT_SCHEMA_VERSION: &str = "2.0";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SchemaVersion {
+    major: u64,
+    minor: u64,
+}
+
+impl SchemaVersion {
+    fn parse(value: &str) -> Option<Self> {
+        let (major, minor) = value.split_once('.')?;
+        if major.is_empty()
+            || minor.is_empty()
+            || minor.contains('.')
+            || !canonical_component(major)
+            || !canonical_component(minor)
+        {
+            return None;
+        }
+        Some(Self {
+            major: major.parse().ok()?,
+            minor: minor.parse().ok()?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactManifest {
     pub manifest_schema_version: String,
@@ -71,7 +98,11 @@ impl ManifestValidationErrors {
 
 impl fmt::Display for ManifestValidationErrors {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{} manifest validation error(s)", self.0.len())
+        write!(formatter, "{} manifest validation error(s)", self.0.len())?;
+        for error in &self.0 {
+            write!(formatter, "; {}: {}", error.path, error.message)?;
+        }
+        Ok(())
     }
 }
 
@@ -80,12 +111,18 @@ impl std::error::Error for ManifestValidationErrors {}
 impl ArtifactManifest {
     pub fn validate(&self) -> Result<(), ManifestValidationErrors> {
         let mut errors = Vec::new();
-        if self.manifest_schema_version != "1.0" {
-            push(&mut errors, "/manifest_schema_version", "must be 1.0");
-        }
-        if self.artifact_schema_version != "2.0" {
-            push(&mut errors, "/artifact_schema_version", "must be 2.0");
-        }
+        validate_supported_schema_version(
+            &mut errors,
+            "/manifest_schema_version",
+            &self.manifest_schema_version,
+            CURRENT_MANIFEST_SCHEMA_VERSION,
+        );
+        validate_supported_schema_version(
+            &mut errors,
+            "/artifact_schema_version",
+            &self.artifact_schema_version,
+            CURRENT_ARTIFACT_SCHEMA_VERSION,
+        );
         for (path, value) in [
             ("/session_id", self.session_id.as_str()),
             ("/artifact_id", self.artifact_id.as_str()),
@@ -225,6 +262,59 @@ impl ArtifactManifest {
     }
 }
 
+pub(crate) fn validate_artifact_version_dependency(
+    input: &str,
+    derived: &str,
+) -> Result<(), String> {
+    let input_version = SchemaVersion::parse(input)
+        .ok_or_else(|| format!("input artifact schema version {input:?} is malformed"))?;
+    let derived_version = SchemaVersion::parse(derived)
+        .ok_or_else(|| format!("derived artifact schema version {derived:?} is malformed"))?;
+    if input_version.major != derived_version.major {
+        return Err(format!(
+            "input artifact schema version {input:?} and derived artifact schema version {derived:?} have different major versions"
+        ));
+    }
+    if input_version.minor > derived_version.minor {
+        return Err(format!(
+            "input artifact schema version {input:?} is newer than derived artifact schema version {derived:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_supported_schema_version(
+    errors: &mut Vec<ManifestValidationError>,
+    path: &str,
+    value: &str,
+    current: &str,
+) {
+    let Some(version) = SchemaVersion::parse(value) else {
+        push(
+            errors,
+            path,
+            format!("must use canonical MAJOR.MINOR format (for example {current}); got {value:?}"),
+        );
+        return;
+    };
+    let current_version =
+        SchemaVersion::parse(current).expect("current schema version constant must be valid");
+    if version.major != current_version.major || version.minor > current_version.minor {
+        push(
+            errors,
+            path,
+            format!(
+                "{value:?} is unsupported; supported versions are {}.0 through {current}",
+                current_version.major
+            ),
+        );
+    }
+}
+
+fn canonical_component(value: &str) -> bool {
+    value.bytes().all(|byte| byte.is_ascii_digit()) && (value == "0" || !value.starts_with('0'))
+}
+
 pub fn is_uuid_v4(value: &str) -> bool {
     if value.len() != 36 {
         return false;
@@ -339,8 +429,62 @@ mod tests {
 
         let errors = value.validate().unwrap_err();
         assert!(errors.errors().iter().any(|error| {
-            error.path == "/artifact_schema_version" && error.message == "must be 2.0"
+            error.path == "/artifact_schema_version"
+                && error
+                    .message
+                    .contains("supported versions are 2.0 through 2.0")
         }));
+    }
+
+    #[test]
+    fn rejects_future_minor_and_malformed_schema_versions_with_details() {
+        let mut future = manifest();
+        future.artifact_schema_version = "2.1".into();
+        let error = future.validate().unwrap_err().to_string();
+        assert!(error.contains("\"2.1\" is unsupported"));
+        assert!(error.contains("2.0 through 2.0"));
+
+        for malformed in ["2", "2.0.1", "v2.0", "02.0", "2.00", ""] {
+            let mut value = manifest();
+            value.artifact_schema_version = malformed.into();
+            let error = value.validate().unwrap_err().to_string();
+            assert!(error.contains("canonical MAJOR.MINOR"), "{malformed:?}");
+            assert!(error.contains(malformed), "{malformed:?}");
+        }
+    }
+
+    #[test]
+    fn backward_compatibility_accepts_only_older_minors_of_the_same_major() {
+        let mut errors = Vec::new();
+        validate_supported_schema_version(&mut errors, "/version", "2.0", "2.3");
+        validate_supported_schema_version(&mut errors, "/version", "2.3", "2.3");
+        assert!(errors.is_empty());
+
+        validate_supported_schema_version(&mut errors, "/version", "2.4", "2.3");
+        validate_supported_schema_version(&mut errors, "/version", "1.9", "2.3");
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn validates_derived_artifact_version_order() {
+        validate_artifact_version_dependency("2.0", "2.1").unwrap();
+        validate_artifact_version_dependency("2.1", "2.1").unwrap();
+        assert!(validate_artifact_version_dependency("2.1", "2.0").is_err());
+        assert!(validate_artifact_version_dependency("1.0", "2.0").is_err());
+    }
+
+    #[test]
+    fn ignores_unknown_fields_but_rejects_unknown_enums_and_missing_required_fields() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value["future_optional_field"] = serde_json::json!(true);
+        serde_json::from_value::<ArtifactManifest>(value.clone()).unwrap();
+
+        value["artifact_type"] = serde_json::json!("future_type");
+        assert!(serde_json::from_value::<ArtifactManifest>(value).is_err());
+
+        let mut missing = serde_json::to_value(manifest()).unwrap();
+        missing.as_object_mut().unwrap().remove("artifact_id");
+        assert!(serde_json::from_value::<ArtifactManifest>(missing).is_err());
     }
 
     #[test]

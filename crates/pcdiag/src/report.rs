@@ -7,11 +7,11 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, Collection,
-    CollectionStatus, Diagnosis, DiskSmart, Evidence, LoadedCollectionArtifact,
-    LoadedDiagnosisArtifact, RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo,
-    WindowsUpdateHistoryEntry, WindowsUpdateResult, load_collection_artifact,
-    load_diagnosis_artifact, sha256_hex,
+    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
+    CURRENT_ARTIFACT_SCHEMA_VERSION, CURRENT_MANIFEST_SCHEMA_VERSION, Collection, CollectionStatus,
+    Diagnosis, DiskSmart, Evidence, LoadedCollectionArtifact, LoadedDiagnosisArtifact,
+    RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo, WindowsUpdateHistoryEntry,
+    WindowsUpdateResult, load_collection_artifact, load_diagnosis_artifact, sha256_hex,
 };
 
 use crate::{
@@ -91,8 +91,8 @@ fn write_report(
     interrupt::check_with_log("report", &incomplete_directory)?;
     write_new(&incomplete_directory.join("report.html"), html)?;
     let manifest = ArtifactManifest {
-        manifest_schema_version: "1.0".into(),
-        artifact_schema_version: "2.0".into(),
+        manifest_schema_version: CURRENT_MANIFEST_SCHEMA_VERSION.into(),
+        artifact_schema_version: CURRENT_ARTIFACT_SCHEMA_VERSION.into(),
         session_id: collection.manifest.session_id,
         artifact_id: timing.artifact_id,
         artifact_type: ArtifactType::Report,

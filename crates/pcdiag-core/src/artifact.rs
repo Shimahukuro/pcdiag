@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt, fs, path::Path};
 
-use crate::{ArtifactManifest, ArtifactType, Collection, CollectionStatus, Diagnosis, sha256_hex};
+use crate::{
+    ArtifactManifest, ArtifactType, Collection, CollectionStatus, Diagnosis,
+    manifest::validate_artifact_version_dependency, sha256_hex,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedCollectionArtifact {
@@ -67,6 +70,14 @@ pub fn load_diagnosis_artifact(
     collection: &LoadedCollectionArtifact,
 ) -> Result<LoadedDiagnosisArtifact, ArtifactLoadError> {
     let (manifest, verified) = load_verified_files(artifact_directory, ArtifactType::Diagnosis)?;
+    validate_artifact_version_dependency(
+        &collection.manifest.artifact_schema_version,
+        &manifest.artifact_schema_version,
+    )
+    .map_err(|message| ArtifactLoadError {
+        path: display(&artifact_directory.join("manifest.json")),
+        message,
+    })?;
     if manifest.session_id != collection.manifest.session_id {
         return Err(ArtifactLoadError {
             path: display(&artifact_directory.join("manifest.json")),

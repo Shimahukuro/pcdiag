@@ -32,7 +32,8 @@ pub use diagnosis::{
 pub use hash::sha256_hex;
 pub use manifest::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
-    ManifestValidationError, ManifestValidationErrors, ToolInfo, display_id, is_uuid_v4,
+    CURRENT_ARTIFACT_SCHEMA_VERSION, CURRENT_MANIFEST_SCHEMA_VERSION, ManifestValidationError,
+    ManifestValidationErrors, ToolInfo, display_id, is_uuid_v4,
 };
 pub use rules::diagnose_collection;
 pub use status::{
