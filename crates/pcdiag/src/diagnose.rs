@@ -5,8 +5,9 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, LoadedCollectionArtifact,
-    ToolInfo, diagnose_collection, load_collection_artifact,
+    ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, CURRENT_ARTIFACT_SCHEMA_VERSION,
+    CURRENT_MANIFEST_SCHEMA_VERSION, LoadedCollectionArtifact, ToolInfo, diagnose_collection,
+    load_collection_artifact,
 };
 
 use crate::{
@@ -94,8 +95,8 @@ fn write_diagnosis(
         ArtifactStatus::Complete
     };
     let manifest = ArtifactManifest {
-        manifest_schema_version: "1.0".into(),
-        artifact_schema_version: "2.0".into(),
+        manifest_schema_version: CURRENT_MANIFEST_SCHEMA_VERSION.into(),
+        artifact_schema_version: CURRENT_ARTIFACT_SCHEMA_VERSION.into(),
         session_id: collection.manifest.session_id,
         artifact_id: timing.artifact_id,
         artifact_type: ArtifactType::Diagnosis,

@@ -5,15 +5,12 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, CollectorStatus, ToolInfo,
-    display_id, sha256_hex,
+    ArtifactFile, ArtifactManifest, ArtifactStatus, ArtifactType, CURRENT_ARTIFACT_SCHEMA_VERSION,
+    CURRENT_MANIFEST_SCHEMA_VERSION, CollectorStatus, ToolInfo, display_id, sha256_hex,
 };
 use pcdiag_windows::WindowsUpdateCollectionOptions;
 
 use crate::{collector_process::CollectorTimeouts, interrupt};
-
-const MANIFEST_SCHEMA_VERSION: &str = "1.0";
-const ARTIFACT_SCHEMA_VERSION: &str = "2.0";
 
 pub fn collect_to_bundle(
     output_root: &Path,
@@ -134,8 +131,8 @@ fn write_bundle(
         ArtifactStatus::Partial
     };
     let manifest = ArtifactManifest {
-        manifest_schema_version: MANIFEST_SCHEMA_VERSION.into(),
-        artifact_schema_version: ARTIFACT_SCHEMA_VERSION.into(),
+        manifest_schema_version: CURRENT_MANIFEST_SCHEMA_VERSION.into(),
+        artifact_schema_version: CURRENT_ARTIFACT_SCHEMA_VERSION.into(),
         session_id: timing.session_id,
         artifact_id: timing.artifact_id,
         artifact_type: ArtifactType::Collection,
