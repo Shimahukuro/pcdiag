@@ -62,6 +62,19 @@ pcdiag.exe collect --output D:\pcdiag-results --collector-timeout smart=60
 
 既定値とタイムアウト時の扱いは[`docs/collector-timeouts.md`](docs/collector-timeouts.md)を参照してください。
 
+## 更新通知
+
+通常の起動時には、GitHub Releasesで新しいバージョンが公開されているかを短いタイムアウトで確認します。新しいバージョンがある場合だけ、現在と最新のバージョンおよび公式Releaseページを標準エラー出力へ表示し、要求された処理をそのまま続行します。自動ダウンロードや自動更新は行いません。
+
+更新確認を含む外部通信を行わない場合は、任意の通常コマンドへ`--no-update-check`を指定してください。
+
+```powershell
+pcdiag.exe --no-update-check
+pcdiag.exe collect --output D:\pcdiag-results --no-update-check
+```
+
+確認先、送信情報、タイムアウト、Releaseの選択方法については[`docs/update-check.md`](docs/update-check.md)を参照してください。
+
 ## 出力
 
 ```text

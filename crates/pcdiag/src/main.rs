@@ -3,6 +3,7 @@ mod collector_process;
 mod diagnose;
 mod interrupt;
 mod report;
+mod update_check;
 
 use collector_process::CollectorTimeouts;
 use pcdiag_windows::WindowsUpdateCollectionOptions;
@@ -13,14 +14,18 @@ use std::{
 };
 
 fn main() -> ExitCode {
-    let command = match parse_args(std::env::args_os().skip(1)) {
-        Ok(command) => command,
+    let parsed = match parse_cli_args(std::env::args_os().skip(1)) {
+        Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("pcdiag: {message}");
             eprintln!("使用方法は pcdiag --help で確認できます。");
             return ExitCode::from(2);
         }
     };
+    let command = parsed.command;
+    if parsed.update_check_enabled && command.handles_artifacts() {
+        update_check::notify_if_available();
+    }
     if command.handles_artifacts() {
         eprintln!("{SENSITIVE_DATA_NOTICE}");
         if let Err(error) = interrupt::install_handler() {
@@ -95,6 +100,12 @@ fn main() -> ExitCode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedArgs {
+    command: Command,
+    update_check_enabled: bool,
+}
+
 fn run_internal_collector(
     collector: pcdiag_core::CollectorName,
     event_log_days: u32,
@@ -148,6 +159,25 @@ impl Command {
     fn handles_artifacts(&self) -> bool {
         !matches!(self, Self::Help | Self::InternalCollect { .. })
     }
+}
+
+fn parse_cli_args(arguments: impl IntoIterator<Item = OsString>) -> Result<ParsedArgs, String> {
+    let mut update_check_enabled = true;
+    let mut filtered = Vec::new();
+    for argument in arguments {
+        if argument == "--no-update-check" {
+            if !update_check_enabled {
+                return Err("--no-update-checkは複数回指定できません".into());
+            }
+            update_check_enabled = false;
+        } else {
+            filtered.push(argument);
+        }
+    }
+    Ok(ParsedArgs {
+        command: parse_args(filtered)?,
+        update_check_enabled,
+    })
 }
 
 fn parse_args(arguments: impl IntoIterator<Item = OsString>) -> Result<Command, String> {
@@ -342,7 +372,7 @@ fn parse_optional_limit(
 
 fn print_help() {
     println!(
-        "pcdiag {}\n\n使用方法:\n  pcdiag [収集オプション]\n  pcdiag collect --output <出力先ディレクトリ> [収集オプション]\n  pcdiag diagnose --output <セッションディレクトリ>\n  pcdiag report --output <セッションディレクトリ>\n  pcdiag --help\n\n収集オプション:\n  --output <パス>                         出力先ディレクトリ\n  --collector-timeout <名前>=<秒>        コレクターの制限時間（1～3600秒、複数指定可）\n  --windows-update-days <日数|all>       Windows Update履歴の取得期間（既定: 180日）\n  --windows-update-max-entries <件数|all> 最大取得件数（既定: 1000件）\n  --windows-update-all                   Windows Updateの全履歴を取得\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
+        "pcdiag {}\n\n使用方法:\n  pcdiag [収集オプション] [--no-update-check]\n  pcdiag collect --output <出力先ディレクトリ> [収集オプション] [--no-update-check]\n  pcdiag diagnose --output <セッションディレクトリ> [--no-update-check]\n  pcdiag report --output <セッションディレクトリ> [--no-update-check]\n  pcdiag --help\n\n共通オプション:\n  --no-update-check                     起動時の更新確認を無効にする\n\n収集オプション:\n  --output <パス>                         出力先ディレクトリ\n  --collector-timeout <名前>=<秒>        コレクターの制限時間（1～3600秒、複数指定可）\n  --windows-update-days <日数|all>       Windows Update履歴の取得期間（既定: 180日）\n  --windows-update-max-entries <件数|all> 最大取得件数（既定: 1000件）\n  --windows-update-all                   Windows Updateの全履歴を取得\n\nコマンド:\n  collect     診断対象PCの情報を収集し、収集バンドルを生成します\n  diagnose    収集バンドルを検証し、診断成果物を生成します\n  report      収集・診断成果物を検証し、HTMLレポートを生成します\n\n一括実行:\n  コマンドを省略すると、collect、diagnose、reportの順に実行します。\n  --outputを省略した場合は現在の作業ディレクトリを出力先にします。",
         env!("CARGO_PKG_VERSION")
     );
 }
@@ -459,6 +489,39 @@ mod tests {
                 windows_updates: WindowsUpdateCollectionOptions::default(),
                 collector_timeouts: CollectorTimeouts::default(),
             }
+        );
+    }
+
+    #[test]
+    fn parses_global_update_check_opt_out_in_any_position() {
+        for arguments in [
+            vec!["--no-update-check", "collect", "--output", "results"],
+            vec!["collect", "--no-update-check", "--output", "results"],
+            vec!["collect", "--output", "results", "--no-update-check"],
+        ] {
+            let parsed = parse_cli_args(arguments.into_iter().map(OsString::from)).unwrap();
+            assert!(!parsed.update_check_enabled);
+            assert!(matches!(parsed.command, Command::Collect { .. }));
+        }
+
+        assert!(parse_cli_args(["--no-update-check".into(), "--no-update-check".into()]).is_err());
+    }
+
+    #[test]
+    fn enables_update_check_by_default_but_not_for_internal_commands() {
+        let parsed =
+            parse_cli_args(["report".into(), "--output".into(), "session".into()]).unwrap();
+        assert!(parsed.update_check_enabled);
+        assert!(parsed.command.handles_artifacts());
+
+        assert!(!Command::Help.handles_artifacts());
+        assert!(
+            !Command::InternalCollect {
+                collector: pcdiag_core::CollectorName::Cpu,
+                event_log_days: 30,
+                windows_updates: WindowsUpdateCollectionOptions::default(),
+            }
+            .handles_artifacts()
         );
     }
 
