@@ -5,8 +5,9 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, ToolInfo,
-    diagnose_collection, load_collection_artifact, load_diagnosis_artifact, sha256_hex,
+    AI_DIAGNOSIS_GUIDE, AI_DIAGNOSIS_GUIDE_FILE_NAME, AI_DIAGNOSIS_GUIDE_MEDIA_TYPE, ArtifactFile,
+    ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, ToolInfo, diagnose_collection,
+    load_collection_artifact, load_diagnosis_artifact, sha256_hex,
 };
 
 const COLLECTION: &[u8] = include_bytes!("fixtures/memory-success-collection.json");
@@ -93,6 +94,11 @@ fn loads_diagnosis_only_when_it_matches_collection() {
     let diagnosis = diagnose_collection(&collection.collection);
     let diagnosis_bytes = serde_json::to_vec_pretty(&diagnosis).unwrap();
     fs::write(diagnosis_directory.join("diagnosis.json"), &diagnosis_bytes).unwrap();
+    fs::write(
+        diagnosis_directory.join(AI_DIAGNOSIS_GUIDE_FILE_NAME),
+        AI_DIAGNOSIS_GUIDE,
+    )
+    .unwrap();
     let manifest = ArtifactManifest {
         manifest_schema_version: "1.0".into(),
         artifact_schema_version: "2.0".into(),
@@ -112,7 +118,15 @@ fn loads_diagnosis_only_when_it_matches_collection() {
             artifact_id: collection.manifest.artifact_id.clone(),
             artifact_type: ArtifactType::Collection,
         }],
-        files: vec![file("diagnosis.json", &diagnosis_bytes)],
+        files: vec![
+            file("diagnosis.json", &diagnosis_bytes),
+            ArtifactFile {
+                path: AI_DIAGNOSIS_GUIDE_FILE_NAME.into(),
+                media_type: AI_DIAGNOSIS_GUIDE_MEDIA_TYPE.into(),
+                size_bytes: AI_DIAGNOSIS_GUIDE.len() as u64,
+                sha256: sha256_hex(AI_DIAGNOSIS_GUIDE.as_bytes()),
+            },
+        ],
     };
     fs::write(
         diagnosis_directory.join("manifest.json"),
@@ -125,6 +139,19 @@ fn loads_diagnosis_only_when_it_matches_collection() {
         loaded.diagnosis.rule_set.version,
         diagnosis.rule_set.version
     );
+
+    fs::remove_file(diagnosis_directory.join(AI_DIAGNOSIS_GUIDE_FILE_NAME)).unwrap();
+    let error = load_diagnosis_artifact(&diagnosis_directory, &collection).unwrap_err();
+    assert!(error.path.ends_with(AI_DIAGNOSIS_GUIDE_FILE_NAME));
+
+    fs::write(
+        diagnosis_directory.join(AI_DIAGNOSIS_GUIDE_FILE_NAME),
+        "modified guide",
+    )
+    .unwrap();
+    let error = load_diagnosis_artifact(&diagnosis_directory, &collection).unwrap_err();
+    assert!(error.path.ends_with(AI_DIAGNOSIS_GUIDE_FILE_NAME));
+    assert!(error.message.contains("size mismatch") || error.message.contains("SHA-256 mismatch"));
 
     remove(collection_directory);
     remove(diagnosis_directory);

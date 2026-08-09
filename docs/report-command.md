@@ -24,6 +24,7 @@ pcdiag.exe report --output <セッションディレクトリ>
 │   └── manifest.json
 └── diagnosis/
     ├── diagnosis.json
+    ├── ai-diagnosis-guide.md
     └── manifest.json
 ```
 
