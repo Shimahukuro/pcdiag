@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 pcdiag-core.workspace = true
 pcdiag-windows.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+semver = "1"
 serde.workspace = true
 serde_json.workspace = true
 
