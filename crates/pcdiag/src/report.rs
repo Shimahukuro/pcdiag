@@ -9,9 +9,10 @@ use std::{
 use pcdiag_core::{
     ArtifactFile, ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType,
     CURRENT_ARTIFACT_SCHEMA_VERSION, CURRENT_MANIFEST_SCHEMA_VERSION, Collection, CollectionStatus,
-    Diagnosis, DiskSmart, Evidence, LoadedCollectionArtifact, LoadedDiagnosisArtifact,
-    RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo, WindowsUpdateHistoryEntry,
-    WindowsUpdateResult, load_collection_artifact, load_diagnosis_artifact, sha256_hex,
+    CollectorName, Diagnosis, DiskSmart, Evidence, FieldCollectionStatus, LoadedCollectionArtifact,
+    LoadedDiagnosisArtifact, RuleEvaluationStatus, Severity, SmartProtocol, ToolInfo,
+    WindowsUpdateHistoryEntry, WindowsUpdateResult, load_collection_artifact,
+    load_diagnosis_artifact, sha256_hex,
 };
 
 use crate::{
@@ -187,7 +188,7 @@ fn render_html(
     render_findings(&mut html, result);
     render_event_logs(&mut html, data, result);
     render_windows_updates(&mut html, data);
-    render_runtime_environment(&mut html, data);
+    render_runtime_environment(&mut html, data, &collection.status);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
     render_storage(&mut html, data);
@@ -199,11 +200,14 @@ fn render_html(
     html
 }
 
-fn render_runtime_environment(html: &mut String, data: &Collection) {
+fn render_runtime_environment(html: &mut String, data: &Collection, status: &CollectionStatus) {
     let runtime = &data.runtime_environment;
     html.push_str(
         "<section><details><summary>常駐・自動実行環境</summary><div class=\"accordion-stack\">",
     );
+    if runtime_appx_permission_denied(status) {
+        html.push_str("<p class=\"finding warning\">一部未取得: 管理者権限がないため、全ユーザーのMicrosoft Storeアプリを取得できませんでした。取得できたデスクトップアプリのみを表示します。</p>");
+    }
 
     render_runtime_table_start(
         html,
@@ -309,6 +313,17 @@ fn render_runtime_environment(html: &mut String, data: &Collection) {
     }
     render_runtime_table_end(html, runtime.scheduled_tasks.items.as_ref());
     html.push_str("</div></details></section>");
+}
+
+fn runtime_appx_permission_denied(status: &CollectionStatus) -> bool {
+    status.collectors.iter().any(|collector| {
+        collector.name == CollectorName::RuntimeEnvironment
+            && collector.fields.iter().any(|field| {
+                field.path == "/runtime_environment/installed_applications/items"
+                    && field.status == FieldCollectionStatus::PermissionDenied
+                    && field.code == "appx_query_failed"
+            })
+    })
 }
 
 fn render_runtime_table_start<T>(
@@ -1333,6 +1348,30 @@ mod tests {
         ] {
             assert!(html.contains(label), "missing {label}");
         }
+    }
+
+    #[test]
+    fn explains_appx_permission_denial_in_runtime_environment_report() {
+        let (mut collection, diagnosis) = loaded_inputs();
+        collection
+            .status
+            .collectors
+            .push(pcdiag_core::CollectorResult {
+                name: CollectorName::RuntimeEnvironment,
+                status: pcdiag_core::CollectorStatus::Partial,
+                duration_ms: 1,
+                messages: vec![],
+                fields: vec![pcdiag_core::FieldCollectionResult {
+                    path: "/runtime_environment/installed_applications/items".into(),
+                    status: FieldCollectionStatus::PermissionDenied,
+                    code: "appx_query_failed".into(),
+                    native_code: None,
+                }],
+            });
+
+        let html = render_html(&collection, &diagnosis);
+        assert!(html.contains("一部未取得: 管理者権限がないため"));
+        assert!(html.contains("取得できたデスクトップアプリのみを表示します。"));
     }
 
     #[test]

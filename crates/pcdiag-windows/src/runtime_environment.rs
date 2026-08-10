@@ -145,15 +145,18 @@ fn parse_response(json: &[u8]) -> Result<Response, serde_json::Error> {
     let mut errors = raw
         .errors
         .into_iter()
-        .map(|error| CategoryError {
-            path: error.path,
-            code: error.code,
-            status: if error.permission_denied {
-                FieldCollectionStatus::PermissionDenied
-            } else {
-                FieldCollectionStatus::Failed
-            },
-            message: None,
+        .map(|error| {
+            let message = script_error_message(&error.code, error.permission_denied);
+            CategoryError {
+                path: error.path,
+                code: error.code,
+                status: if error.permission_denied {
+                    FieldCollectionStatus::PermissionDenied
+                } else {
+                    FieldCollectionStatus::Failed
+                },
+                message,
+            }
         })
         .collect::<Vec<_>>();
     let collection = RuntimeEnvironmentCollection {
@@ -180,6 +183,17 @@ fn parse_response(json: &[u8]) -> Result<Response, serde_json::Error> {
         ),
     };
     Ok(Response { collection, errors })
+}
+
+#[cfg(any(windows, test))]
+fn script_error_message(code: &str, permission_denied: bool) -> Option<String> {
+    match code {
+        "appx_query_failed" if permission_denied => Some(
+            "全ユーザーのMicrosoft Storeアプリを列挙する権限がないため、取得できたデスクトップアプリのみを保存しました"
+                .into(),
+        ),
+        _ => None,
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -420,6 +434,20 @@ mod tests {
                 })
         }));
     }
+
+    #[test]
+    fn explains_appx_permission_denial_without_native_error_text() {
+        let response = parse_response(br#"{"collection":{"services":{"items":[],"truncated":false},"startup_applications":{"items":[],"truncated":false},"installed_applications":{"items":[],"truncated":false},"running_processes":{"items":[],"truncated":false},"scheduled_tasks":{"items":[],"truncated":false}},"errors":[{"path":"/runtime_environment/installed_applications/items","code":"appx_query_failed","permission_denied":true}]}"#).unwrap();
+        let error = &response.errors[0];
+        assert_eq!(error.status, FieldCollectionStatus::PermissionDenied);
+        assert_eq!(
+            error.message.as_deref(),
+            Some(
+                "全ユーザーのMicrosoft Storeアプリを列挙する権限がないため、取得できたデスクトップアプリのみを保存しました"
+            )
+        );
+    }
+
     #[test]
     fn script_uses_read_only_sources_and_redacts_secret_arguments() {
         assert!(SCRIPT.contains("Win32_Service"));
@@ -427,6 +455,7 @@ mod tests {
         assert!(SCRIPT.contains("Get-ScheduledTask"));
         assert!(SCRIPT.contains("Get-AppxPackage"));
         assert!(SCRIPT.contains("Redact-Command"));
+        assert!(SCRIPT.contains("Where-Object {$null -ne $_"));
         assert!(!SCRIPT.contains("Win32_Product"));
     }
 }
