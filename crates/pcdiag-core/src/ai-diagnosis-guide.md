@@ -1,7 +1,7 @@
 ---
 document_type: pcdiag_ai_diagnosis_guide
 guide_version: 1.0.0
-artifact_schema_version: "2.0"
+artifact_schema_version: "2.1"
 compatible_rule_sets:
   - name: pcdiag_builtin
     version: 0.8.0

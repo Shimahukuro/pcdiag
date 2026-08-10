@@ -187,6 +187,7 @@ fn render_html(
     render_findings(&mut html, result);
     render_event_logs(&mut html, data, result);
     render_windows_updates(&mut html, data);
+    render_runtime_environment(&mut html, data);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
     render_storage(&mut html, data);
@@ -196,6 +197,173 @@ fn render_html(
     html.push_str("<footer class=\"artifact-notice\"><h2>成果物の取り扱いに関する注意</h2><p>この診断成果物には、診断に必要な端末情報、アカウント識別情報、ネットワーク情報、ファイルパス、イベント内容などが含まれる場合があります。保存先、共有範囲、保管期間、廃棄は担当者が管理してください。pcdiagは成果物を自動削除しません。</p></footer>");
     html.push_str("</main></body></html>\n");
     html
+}
+
+fn render_runtime_environment(html: &mut String, data: &Collection) {
+    let runtime = &data.runtime_environment;
+    html.push_str(
+        "<section><details><summary>常駐・自動実行環境</summary><div class=\"accordion-stack\">",
+    );
+
+    render_runtime_table_start(
+        html,
+        "サービス",
+        runtime.services.items.as_ref(),
+        runtime.services.truncated,
+        &["名前", "状態 / 起動方式", "実行情報", "発行元 / 署名"],
+    );
+    if let Some(items) = &runtime.services.items {
+        for item in items {
+            write!(html, "<tr><td><b>{}</b><br><span class=\"muted\">{}</span></td><td>{} / {}</td><td><code>{}</code><br>{}</td><td>{}</td></tr>", escape(&item.name), escape(item.display_name.as_deref().unwrap_or("")), escape(&item.state), escape(&item.start_mode), escape(item.command_line.as_deref().unwrap_or("不明")), escape(item.account.as_deref().unwrap_or("不明")), binary_summary(&item.binary)).unwrap();
+        }
+    }
+    render_runtime_table_end(html, runtime.services.items.as_ref());
+
+    render_runtime_table_start(
+        html,
+        "スタートアップアプリ",
+        runtime.startup_applications.items.as_ref(),
+        runtime.startup_applications.truncated,
+        &["名前", "状態 / 起動元", "コマンド", "発行元 / 署名"],
+    );
+    if let Some(items) = &runtime.startup_applications.items {
+        for item in items {
+            write!(
+                html,
+                "<tr><td>{}</td><td>{} / {}</td><td><code>{}</code></td><td>{}</td></tr>",
+                escape(&item.name),
+                match item.enabled {
+                    Some(true) => "有効",
+                    Some(false) => "無効",
+                    None => "不明",
+                },
+                escape(&item.source),
+                escape(item.command_line.as_deref().unwrap_or("不明")),
+                binary_summary(&item.binary)
+            )
+            .unwrap();
+        }
+    }
+    render_runtime_table_end(html, runtime.startup_applications.items.as_ref());
+
+    render_runtime_table_start(
+        html,
+        "インストール済みアプリ",
+        runtime.installed_applications.items.as_ref(),
+        runtime.installed_applications.truncated,
+        &["製品", "バージョン", "発行元", "種別 / アーキテクチャ"],
+    );
+    if let Some(items) = &runtime.installed_applications.items {
+        for item in items {
+            write!(
+                html,
+                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{:?} / {}</td></tr>",
+                escape(&item.name),
+                escape(item.version.as_deref().unwrap_or("不明")),
+                escape(item.publisher.as_deref().unwrap_or("不明")),
+                item.kind,
+                escape(item.architecture.as_deref().unwrap_or("不明"))
+            )
+            .unwrap();
+        }
+    }
+    render_runtime_table_end(html, runtime.installed_applications.items.as_ref());
+
+    render_runtime_table_start(
+        html,
+        "実行中プロセス",
+        runtime.running_processes.items.as_ref(),
+        runtime.running_processes.truncated,
+        &["プロセス", "PID / 親PID", "CPU / メモリ", "実行情報"],
+    );
+    if let Some(items) = &runtime.running_processes.items {
+        for item in items {
+            write!(html, "<tr><td>{}</td><td>{} / {}</td><td>{} ms / {} bytes</td><td><code>{}</code><br>{:?}</td></tr>", escape(&item.name), item.process_id, item.parent_process_id.map_or_else(|| "不明".into(), |v| v.to_string()), item.cpu_time_ms.map_or_else(|| "不明".into(), |v| v.to_string()), item.working_set_bytes.map_or_else(|| "不明".into(), |v| v.to_string()), escape(item.command_line.as_deref().unwrap_or("不明")), item.access).unwrap();
+        }
+    }
+    render_runtime_table_end(html, runtime.running_processes.items.as_ref());
+
+    render_runtime_table_start(
+        html,
+        "スケジュール済みタスク",
+        runtime.scheduled_tasks.items.as_ref(),
+        runtime.scheduled_tasks.truncated,
+        &["タスク", "状態", "トリガー", "前回結果 / 次回実行"],
+    );
+    if let Some(items) = &runtime.scheduled_tasks.items {
+        for item in items {
+            write!(
+                html,
+                "<tr><td><code>{}{}</code></td><td>{} / {}</td><td>{}</td><td>{} / {}</td></tr>",
+                escape(&item.folder),
+                escape(&item.name),
+                if item.enabled { "有効" } else { "無効" },
+                escape(&item.state),
+                escape(&item.triggers.join(", ")),
+                item.last_result
+                    .map_or_else(|| "不明".into(), |v| format!("{v} (0x{:08X})", v as u32)),
+                escape(item.next_run_at.as_deref().unwrap_or("不明"))
+            )
+            .unwrap();
+        }
+    }
+    render_runtime_table_end(html, runtime.scheduled_tasks.items.as_ref());
+    html.push_str("</div></details></section>");
+}
+
+fn render_runtime_table_start<T>(
+    html: &mut String,
+    title: &str,
+    items: Option<&Vec<T>>,
+    truncated: bool,
+    headers: &[&str],
+) {
+    write!(
+        html,
+        "<details><summary>{}（{}）{}</summary>",
+        escape(title),
+        items.map_or_else(|| "未取得".into(), |v| format!("{}件", v.len())),
+        if truncated {
+            " <span class=\"warning\">一部省略</span>"
+        } else {
+            ""
+        }
+    )
+    .unwrap();
+    if items.is_some_and(Vec::is_empty) {
+        html.push_str("<p>該当項目はありません。</p>");
+        return;
+    }
+    if items.is_none() {
+        html.push_str("<p>取得できませんでした。収集状態を確認してください。</p>");
+        return;
+    }
+    html.push_str("<div class=\"table-wrap\"><table><tr>");
+    for header in headers {
+        write!(html, "<th>{}</th>", escape(header)).unwrap();
+    }
+    html.push_str("</tr>");
+}
+
+fn render_runtime_table_end<T>(html: &mut String, items: Option<&Vec<T>>) {
+    if items.is_some_and(|items| !items.is_empty()) {
+        html.push_str("</table></div>");
+    }
+    html.push_str("</details>");
+}
+
+fn binary_summary(binary: &pcdiag_core::BinaryIdentity) -> String {
+    let exists = match binary.file_exists {
+        Some(true) => "存在",
+        Some(false) => "参照先なし",
+        None => "未確認",
+    };
+    format!(
+        "{} / {} / {}",
+        escape(binary.publisher.as_deref().unwrap_or("発行元不明")),
+        escape(binary.signature_status.as_deref().unwrap_or("署名不明")),
+        exists
+    )
 }
 
 fn render_windows_updates(html: &mut String, data: &Collection) {
@@ -1093,7 +1261,8 @@ mod tests {
         collection.collection.event_logs.application = None;
         collection.collection.event_logs.security = None;
         diagnosis.diagnosis = diagnose_collection(&collection.collection);
-        let html = render_html(&collection, &diagnosis);
+        let mut html = String::new();
+        render_event_logs(&mut html, &collection.collection, &diagnosis.diagnosis);
 
         assert_eq!(html.matches("未取得").count(), 3);
         assert!(!html.contains("取得できた範囲に高優先度イベントはありません。"));
@@ -1148,6 +1317,22 @@ mod tests {
         assert!(html.contains("aborted-1"));
         assert!(html.contains("2026-07-30 21:00:00 JST"));
         assert!(!html.contains("2026-07-30T12:00:00Z"));
+    }
+
+    #[test]
+    fn renders_all_runtime_environment_categories_and_unavailable_state() {
+        let (collection, diagnosis) = loaded_inputs();
+        let html = render_html(&collection, &diagnosis);
+        for label in [
+            "常駐・自動実行環境",
+            "サービス（未取得）",
+            "スタートアップアプリ（未取得）",
+            "インストール済みアプリ（未取得）",
+            "実行中プロセス（未取得）",
+            "スケジュール済みタスク（未取得）",
+        ] {
+            assert!(html.contains(label), "missing {label}");
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MIN_TIMEOUT_SECONDS: u64 = 1;
 const MAX_TIMEOUT_SECONDS: u64 = 3_600;
 
-pub(crate) const COLLECTOR_ORDER: [CollectorName; 13] = [
+pub(crate) const COLLECTOR_ORDER: [CollectorName; 14] = [
     CollectorName::Windows,
     CollectorName::WindowsUpdates,
     CollectorName::Clock,
@@ -32,6 +32,7 @@ pub(crate) const COLLECTOR_ORDER: [CollectorName; 13] = [
     CollectorName::Partitions,
     CollectorName::Volumes,
     CollectorName::Smart,
+    CollectorName::RuntimeEnvironment,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -87,7 +88,9 @@ fn default_timeout(name: CollectorName) -> Duration {
         | CollectorName::Cpu
         | CollectorName::Firmware
         | CollectorName::Memory => 10,
-        CollectorName::EventLogs | CollectorName::WindowsUpdates => 120,
+        CollectorName::EventLogs
+        | CollectorName::WindowsUpdates
+        | CollectorName::RuntimeEnvironment => 120,
         CollectorName::Gpu
         | CollectorName::Devices
         | CollectorName::PhysicalDisks
@@ -112,6 +115,7 @@ pub(crate) fn collector_name(name: CollectorName) -> &'static str {
         CollectorName::Partitions => "partitions",
         CollectorName::Volumes => "volumes",
         CollectorName::Smart => "smart",
+        CollectorName::RuntimeEnvironment => "runtime_environment",
     }
 }
 
@@ -163,6 +167,7 @@ pub(crate) fn collect_one(
         CollectorName::Partitions => output!(pcdiag_windows::collect_partitions()),
         CollectorName::Volumes => output!(pcdiag_windows::collect_volumes()),
         CollectorName::Smart => output!(pcdiag_windows::collect_smart()),
+        CollectorName::RuntimeEnvironment => output!(pcdiag_windows::collect_runtime_environment()),
     })
 }
 
@@ -479,6 +484,13 @@ fn empty_collection(
             "lookback_days": event_log_days,
             "system": null, "application": null, "security": null
         }),
+        CollectorName::RuntimeEnvironment => json!({
+            "services": {"items": null, "truncated": false},
+            "startup_applications": {"items": null, "truncated": false},
+            "installed_applications": {"items": null, "truncated": false},
+            "running_processes": {"items": null, "truncated": false},
+            "scheduled_tasks": {"items": null, "truncated": false}
+        }),
     }
 }
 
@@ -493,7 +505,8 @@ fn assemble(outputs: Vec<WorkerOutput>) -> Result<CompleteCollectionResult, serd
         "gpus": null,
         "devices": null,
         "event_logs": null,
-        "storage": {"disks": null, "partitions": null, "volumes": null, "smart": null}
+        "storage": {"disks": null, "partitions": null, "volumes": null, "smart": null},
+        "runtime_environment": null
     });
     let mut collectors = Vec::with_capacity(outputs.len());
     for output in outputs {
@@ -511,6 +524,7 @@ fn assemble(outputs: Vec<WorkerOutput>) -> Result<CompleteCollectionResult, serd
             CollectorName::Partitions => "/storage/partitions",
             CollectorName::Volumes => "/storage/volumes",
             CollectorName::Smart => "/storage/smart",
+            CollectorName::RuntimeEnvironment => "/runtime_environment",
         };
         *collection
             .pointer_mut(path)

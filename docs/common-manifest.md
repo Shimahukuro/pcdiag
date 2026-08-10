@@ -40,7 +40,7 @@ pcdiag-<日時>-<表示用ID>/
 ```json
 {
   "manifest_schema_version": "1.0",
-  "artifact_schema_version": "2.0",
+  "artifact_schema_version": "2.1",
   "session_id": "a3f17c92-d604-4be8-9ea7-6ab7b92e41c5",
   "artifact_id": "831d1074-1145-4a66-bfa2-169903866adb",
   "artifact_type": "collection",
@@ -94,7 +94,7 @@ pcdiag-<日時>-<表示用ID>/
 マニフェストが管理する主成果物のデータ形式を表す。
 
 ```json
-"artifact_schema_version": "2.0"
+"artifact_schema_version": "2.1"
 ```
 
 対象例:
@@ -111,7 +111,7 @@ pcdiag-<日時>-<表示用ID>/
 ```json
 {
   "manifest_schema_version": "1.0",
-  "artifact_schema_version": "2.0",
+  "artifact_schema_version": "2.1",
   "tool": {
     "name": "pcdiag",
     "version": "0.1.0"
@@ -124,6 +124,8 @@ pcdiag-<日時>-<表示用ID>/
 診断成果物の`files`には`diagnosis.json`に加えて`ai-diagnosis-guide.md`を記録する。ガイドのメディア種別は`text/markdown; charset=utf-8`とし、他の構成ファイルと同様に`size_bytes`と`sha256`を検証する。ガイドは対象PC固有情報を含まない静的ファイルである。
 
 `2.0`では、GPUおよび接続デバイスの`device_state.enabled`を、Windowsの`DN_STARTED`が表す意味に合わせて`device_state.started`へ変更した。この変更には後方互換性がないため、`artifact_schema_version == 1.0`の成果物は`2.0`対応実装への入力として受理しない。
+
+`2.1`では、後方互換な任意カテゴリとして`runtime_environment`を追加した。サービス、スタートアップアプリ、インストール済みアプリ、実行中プロセス、スケジュール済みタスクを保持する。`2.0`成果物ではこのカテゴリを未取得として扱う。
 
 ### 更新条件
 

@@ -3,8 +3,8 @@ use pcdiag_core::{Collection, CollectionStatus, StorageCollection};
 use crate::{
     WindowsUpdateCollectionOptions, collect_clock, collect_cpu, collect_devices,
     collect_event_logs, collect_firmware, collect_gpus, collect_memory, collect_partitions,
-    collect_physical_disks, collect_smart, collect_volumes, collect_windows_info,
-    collect_windows_updates,
+    collect_physical_disks, collect_runtime_environment, collect_smart, collect_volumes,
+    collect_windows_info, collect_windows_updates,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +67,8 @@ where
     check_cancelled!();
     let smart = collect_smart();
     check_cancelled!();
+    let runtime_environment = collect_runtime_environment();
+    check_cancelled!();
 
     Ok(CompleteCollectionResult {
         collection: Collection {
@@ -85,6 +87,7 @@ where
                 volumes: volumes.collection,
                 smart: smart.collection,
             },
+            runtime_environment: runtime_environment.collection,
         },
         status: CollectionStatus {
             collectors: vec![
@@ -101,6 +104,7 @@ where
                 partitions.status,
                 volumes.status,
                 smart.status,
+                runtime_environment.status,
             ],
         },
     })

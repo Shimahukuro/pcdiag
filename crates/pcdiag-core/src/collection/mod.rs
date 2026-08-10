@@ -6,6 +6,7 @@ mod firmware;
 mod gpu;
 mod memory;
 mod physical_disk;
+mod runtime_environment;
 mod windows;
 mod windows_update;
 
@@ -17,6 +18,11 @@ pub use memory::{CommitMemory, MemoryCollection, PhysicalMemory, VirtualMemory};
 pub use physical_disk::{
     DiskBusType, DiskPartition, DiskSmart, PartitionStyle, PhysicalDisk, SmartProtocol,
     StorageCollection, StorageVolume, VolumeExtent,
+};
+pub use runtime_environment::{
+    BinaryIdentity, CategoryCollection, InstalledApplication, InstalledApplicationKind,
+    ProcessAccess, RunningProcess, RuntimeEnvironmentCollection, ScheduledTask,
+    ScheduledTaskAction, Service, StartupApplication,
 };
 pub use windows::{BootMode, SystemArchitecture, WindowsCollection};
 pub use windows_update::{
@@ -43,6 +49,12 @@ pub struct Collection {
     pub devices: Option<Vec<ConnectedDevice>>,
     pub event_logs: EventLogCollection,
     pub storage: StorageCollection,
+    /// Windows resident software and automatic execution facts. Older artifacts omit this field.
+    #[serde(
+        default,
+        skip_serializing_if = "RuntimeEnvironmentCollection::is_unavailable"
+    )]
+    pub runtime_environment: RuntimeEnvironmentCollection,
 }
 pub use clock::{ClockCollection, HardwareClock, WindowsServiceState};
 pub use device::{ConnectedDevice, DeviceDriver, DeviceState};
