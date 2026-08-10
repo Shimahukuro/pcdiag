@@ -178,9 +178,17 @@ pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 pub(crate) fn artifact_file(path: &str, bytes: &[u8]) -> ArtifactFile {
+    artifact_file_with_media_type(path, "application/json", bytes)
+}
+
+pub(crate) fn artifact_file_with_media_type(
+    path: &str,
+    media_type: &str,
+    bytes: &[u8],
+) -> ArtifactFile {
     ArtifactFile {
         path: path.into(),
-        media_type: "application/json".into(),
+        media_type: media_type.into(),
         size_bytes: u64::try_from(bytes.len()).unwrap_or(u64::MAX),
         sha256: sha256_hex(bytes),
     }

@@ -12,6 +12,54 @@ const MEMORY_AVAILABLE_THRESHOLD_PERCENT: f64 = 10.0;
 const VOLUME_FREE_THRESHOLD_PERCENT: f64 = 10.0;
 const VOLUME_FREE_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024 * 1024;
 
+pub const BUILTIN_RULE_SET_NAME: &str = "pcdiag_builtin";
+pub const BUILTIN_RULE_SET_VERSION: &str = "0.8.0";
+
+pub const BUILTIN_RULE_IDS: &[&str] = &[
+    "memory.available_ratio",
+    "gpu.device_problem",
+    "gpu.adapter_started",
+    "gpu.driver_version_available",
+    "gpu.device_instance_id_unique",
+    "device.device_problem",
+    "event_log.system.availability",
+    "event_log.application.availability",
+    "event_log.security.availability",
+    "event_log.system.unexpected_shutdown",
+    "event_log.system.storage_io_failure",
+    "event_log.system.service_failure",
+    "event_log.application.application_failure",
+    "event_log.security.audit_log_cleared",
+    "event_log.security.failed_logon",
+    "event_log.security.audit_policy_changed",
+    "storage.smart_failure_prediction",
+    "storage.nvme_critical_warning",
+    "storage.nvme_percentage_used",
+    "storage.volume_free_space",
+];
+
+pub const BUILTIN_RECOMMENDATION_CODES: &[&str] = &[
+    "review_memory_consumption",
+    "review_gpu_device_problem",
+    "review_gpu_start_state",
+    "review_gpu_driver_installation",
+    "review_gpu_enumeration",
+    "enable_device",
+    "review_device_problem",
+    "restore_event_log_collection",
+    "investigate_unexpected_shutdown",
+    "review_storage_io_failure",
+    "investigate_service_failure",
+    "investigate_application_failure",
+    "investigate_audit_log_clearance",
+    "review_failed_logons",
+    "review_audit_policy_change",
+    "backup_and_replace_disk",
+    "review_nvme_health",
+    "plan_nvme_replacement",
+    "free_volume_space",
+];
+
 pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     let mut evaluations = vec![evaluate_memory_available_ratio(collection)];
     evaluations.extend(evaluate_gpus(collection));
@@ -19,13 +67,32 @@ pub fn diagnose_collection(collection: &Collection) -> Diagnosis {
     evaluations.extend(evaluate_event_logs(collection));
     evaluations.extend(evaluate_storage(collection));
     let summary = summarize(&evaluations);
-    Diagnosis {
+    let diagnosis = Diagnosis {
         rule_set: RuleSetInfo {
-            name: "pcdiag_builtin".into(),
-            version: "0.8.0".into(),
+            name: BUILTIN_RULE_SET_NAME.into(),
+            version: BUILTIN_RULE_SET_VERSION.into(),
         },
         summary,
         evaluations,
+    };
+    assert_catalogued_output(&diagnosis);
+    diagnosis
+}
+
+fn assert_catalogued_output(diagnosis: &Diagnosis) {
+    for evaluation in &diagnosis.evaluations {
+        assert!(
+            BUILTIN_RULE_IDS.contains(&evaluation.rule_id.as_str()),
+            "rule_id {:?} is not in BUILTIN_RULE_IDS",
+            evaluation.rule_id
+        );
+        if let Some(recommendation) = &evaluation.recommendation {
+            assert!(
+                BUILTIN_RECOMMENDATION_CODES.contains(&recommendation.code.as_str()),
+                "recommendation code {:?} is not in BUILTIN_RECOMMENDATION_CODES",
+                recommendation.code
+            );
+        }
     }
 }
 

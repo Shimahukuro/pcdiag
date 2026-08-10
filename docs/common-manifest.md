@@ -17,6 +17,8 @@ pcdiag-<日時>-<表示用ID>/
 ├── collection/
 │   └── manifest.json
 ├── diagnosis/
+│   ├── diagnosis.json
+│   ├── ai-diagnosis-guide.md
 │   └── manifest.json
 └── report/
     └── manifest.json
@@ -99,6 +101,7 @@ pcdiag-<日時>-<表示用ID>/
 
 - `collection.json`の収集データ形式
 - `diagnosis.json`の診断結果形式
+- `ai-diagnosis-guide.md`が解釈する診断結果とcollectionパスの形式
 - `report.html`のレポート形式
 
 ### ツールバージョンとの分離
@@ -117,6 +120,8 @@ pcdiag-<日時>-<表示用ID>/
 ```
 
 `pcdiag`のバージョンが更新されても、保存形式に変更がなければスキーマバージョンは変更しない。
+
+診断成果物の`files`には`diagnosis.json`に加えて`ai-diagnosis-guide.md`を記録する。ガイドのメディア種別は`text/markdown; charset=utf-8`とし、他の構成ファイルと同様に`size_bytes`と`sha256`を検証する。ガイドは対象PC固有情報を含まない静的ファイルである。
 
 `2.0`では、GPUおよび接続デバイスの`device_state.enabled`を、Windowsの`DN_STARTED`が表す意味に合わせて`device_state.started`へ変更した。この変更には後方互換性がないため、`artifact_schema_version == 1.0`の成果物は`2.0`対応実装への入力として受理しない。
 

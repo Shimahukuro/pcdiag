@@ -5,13 +5,14 @@ use std::{
 };
 
 use pcdiag_core::{
-    ArtifactInput, ArtifactManifest, ArtifactStatus, ArtifactType, CURRENT_ARTIFACT_SCHEMA_VERSION,
+    AI_DIAGNOSIS_GUIDE, AI_DIAGNOSIS_GUIDE_FILE_NAME, AI_DIAGNOSIS_GUIDE_MEDIA_TYPE, ArtifactInput,
+    ArtifactManifest, ArtifactStatus, ArtifactType, CURRENT_ARTIFACT_SCHEMA_VERSION,
     CURRENT_MANIFEST_SCHEMA_VERSION, LoadedCollectionArtifact, ToolInfo, diagnose_collection,
     load_collection_artifact,
 };
 
 use crate::{
-    bundle::{self, artifact_file, pretty_json, write_new},
+    bundle::{self, artifact_file, artifact_file_with_media_type, pretty_json, write_new},
     interrupt,
 };
 
@@ -85,6 +86,12 @@ fn write_diagnosis(
         &incomplete_directory.join("diagnosis.json"),
         &diagnosis_bytes,
     )?;
+    interrupt::check_with_log("diagnose", &incomplete_directory)?;
+    let guide_bytes = AI_DIAGNOSIS_GUIDE.as_bytes();
+    write_new(
+        &incomplete_directory.join(AI_DIAGNOSIS_GUIDE_FILE_NAME),
+        guide_bytes,
+    )?;
     let artifact_status = if diagnosis
         .evaluations
         .iter()
@@ -113,7 +120,14 @@ fn write_diagnosis(
             artifact_id: collection.manifest.artifact_id,
             artifact_type: ArtifactType::Collection,
         }],
-        files: vec![artifact_file("diagnosis.json", &diagnosis_bytes)],
+        files: vec![
+            artifact_file("diagnosis.json", &diagnosis_bytes),
+            artifact_file_with_media_type(
+                AI_DIAGNOSIS_GUIDE_FILE_NAME,
+                AI_DIAGNOSIS_GUIDE_MEDIA_TYPE,
+                guide_bytes,
+            ),
+        ],
     };
     manifest.validate()?;
     interrupt::check_with_log("diagnose", &incomplete_directory)?;
@@ -297,6 +311,22 @@ mod tests {
             serde_json::from_slice(&fs::read(written.join("manifest.json")).unwrap()).unwrap();
         manifest.validate().unwrap();
         assert_eq!(manifest.inputs[0].artifact_type, ArtifactType::Collection);
+        assert_eq!(manifest.files.len(), 2);
+        let guide_file = manifest
+            .files
+            .iter()
+            .find(|file| file.path == AI_DIAGNOSIS_GUIDE_FILE_NAME)
+            .unwrap();
+        assert_eq!(guide_file.media_type, AI_DIAGNOSIS_GUIDE_MEDIA_TYPE);
+        assert_eq!(guide_file.size_bytes, AI_DIAGNOSIS_GUIDE.len() as u64);
+        assert_eq!(
+            guide_file.sha256,
+            pcdiag_core::sha256_hex(AI_DIAGNOSIS_GUIDE.as_bytes())
+        );
+        assert_eq!(
+            fs::read_to_string(written.join(AI_DIAGNOSIS_GUIDE_FILE_NAME)).unwrap(),
+            AI_DIAGNOSIS_GUIDE
+        );
         let diagnosis: pcdiag_core::Diagnosis =
             serde_json::from_slice(&fs::read(written.join("diagnosis.json")).unwrap()).unwrap();
         assert_eq!(

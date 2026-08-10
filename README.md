@@ -85,6 +85,7 @@ pcdiag-YYYYMMDD-HHMMSS-ID/
 │   └── manifest.json
 ├── diagnosis/
 │   ├── diagnosis.json
+│   ├── ai-diagnosis-guide.md
 │   └── manifest.json
 └── report/
     ├── report.html
@@ -92,6 +93,8 @@ pcdiag-YYYYMMDD-HHMMSS-ID/
 ```
 
 `report.html`は一般的なWebブラウザーで開けます。
+
+AIへ初期診断を依頼する場合は、診断成果物内の`ai-diagnosis-guide.md`と`diagnosis.json`をセットで渡してください。追加情報が必要な場合も、ガイドに従って`collection.json`または`status.json`の必要部分だけを共有してください。
 
 ## 権限
 
