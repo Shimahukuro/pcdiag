@@ -29,6 +29,7 @@ struct CategoryError {
     path: String,
     code: String,
     status: FieldCollectionStatus,
+    message: Option<String>,
 }
 
 #[cfg(any(windows, test))]
@@ -77,7 +78,7 @@ pub fn collect_runtime_environment() -> RuntimeEnvironmentCollectionResult {
                 .map(|error| CollectionMessage {
                     code: error.code,
                     native_code: None,
-                    message: None,
+                    message: error.message,
                 })
                 .collect::<Vec<_>>();
             if partial && fields.is_empty() {
@@ -152,6 +153,7 @@ fn parse_response(json: &[u8]) -> Result<Response, serde_json::Error> {
             } else {
                 FieldCollectionStatus::Failed
             },
+            message: None,
         })
         .collect::<Vec<_>>();
     let collection = RuntimeEnvironmentCollection {
@@ -207,12 +209,22 @@ fn parse_category<T: DeserializeOwned>(
         Some(Value::Array(values)) => {
             let mut items = Vec::with_capacity(values.len());
             for (index, value) in values.iter().cloned().enumerate() {
-                match serde_json::from_value(value) {
+                match serde_path_to_error::deserialize(value.clone()) {
                     Ok(item) => items.push(item),
-                    Err(_) => errors.push(invalid_error(
-                        format!("{base}/items/{index}"),
-                        "runtime_environment_item_invalid",
-                    )),
+                    Err(error) => {
+                        let field_path = error.path().to_string();
+                        let pointer_suffix = serde_path_to_pointer(&field_path);
+                        let actual = json_type_at_path(&value, &field_path);
+                        let expected = safe_expected_type(error.inner());
+                        errors.push(CategoryError {
+                            path: format!("{base}/items/{index}{pointer_suffix}"),
+                            code: "runtime_environment_item_invalid".into(),
+                            status: FieldCollectionStatus::InvalidValue,
+                            message: Some(format!(
+                                "項目のデータ型が不正です（フィールド: {field_path}, 実際: {actual}, 期待: {expected}）"
+                            )),
+                        });
+                    }
                 }
             }
             Some(items)
@@ -234,7 +246,87 @@ fn invalid_error(path: String, code: &str) -> CategoryError {
         path,
         code: code.into(),
         status: FieldCollectionStatus::InvalidValue,
+        message: None,
     }
+}
+
+#[cfg(any(windows, test))]
+fn serde_path_to_pointer(path: &str) -> String {
+    if path.is_empty() || path == "." {
+        return String::new();
+    }
+    let mut pointer = String::new();
+    let mut segment = String::new();
+    for character in path.chars() {
+        match character {
+            '.' => {
+                if !segment.is_empty() {
+                    pointer.push('/');
+                    pointer.push_str(&segment);
+                    segment.clear();
+                }
+            }
+            '[' | ']' => {
+                if !segment.is_empty() {
+                    pointer.push('/');
+                    pointer.push_str(&segment);
+                    segment.clear();
+                }
+            }
+            _ => segment.push(character),
+        }
+    }
+    if !segment.is_empty() {
+        pointer.push('/');
+        pointer.push_str(&segment);
+    }
+    pointer
+}
+
+#[cfg(any(windows, test))]
+fn json_type_at_path(value: &Value, path: &str) -> &'static str {
+    let mut current = value;
+    let normalized = serde_path_to_pointer(path);
+    for segment in normalized.split('/').filter(|segment| !segment.is_empty()) {
+        current = match current {
+            Value::Object(object) => match object.get(segment) {
+                Some(value) => value,
+                None => return "missing",
+            },
+            Value::Array(array) => match segment.parse::<usize>().ok().and_then(|i| array.get(i)) {
+                Some(value) => value,
+                None => return "missing",
+            },
+            _ => return json_type(current),
+        };
+    }
+    json_type(current)
+}
+
+#[cfg(any(windows, test))]
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(number) if number.is_u64() => "unsigned integer",
+        Value::Number(number) if number.is_i64() => "integer",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+#[cfg(any(windows, test))]
+fn safe_expected_type(error: &serde_json::Error) -> String {
+    let text = error.to_string();
+    if text.starts_with("missing field") {
+        return "required field".into();
+    }
+    text.rsplit_once(", expected ").map_or_else(
+        || "schema-compatible value".into(),
+        |(_, expected)| expected.into(),
+    )
 }
 
 #[cfg(any(windows, test))]
@@ -319,8 +411,13 @@ mod tests {
         assert_eq!(services[0].name, "valid");
         assert_eq!(response.collection.startup_applications.items, Some(vec![]));
         assert!(response.errors.iter().any(|error| {
-            error.path == "/runtime_environment/services/items/1"
+            error.path == "/runtime_environment/services/items/1/process_id"
                 && error.status == FieldCollectionStatus::InvalidValue
+                && error.message.as_deref().is_some_and(|message| {
+                    message.contains("フィールド: process_id")
+                        && message.contains("実際: string")
+                        && !message.contains("not-a-number")
+                })
         }));
     }
     #[test]
