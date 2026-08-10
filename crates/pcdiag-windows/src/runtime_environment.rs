@@ -1,10 +1,18 @@
 use std::time::Instant;
 
+#[cfg(any(windows, test))]
+use pcdiag_core::{
+    CategoryCollection, InstalledApplication, RunningProcess, ScheduledTask, Service,
+    StartupApplication,
+};
 use pcdiag_core::{
     CollectionMessage, CollectorName, CollectorResult, CollectorStatus, FieldCollectionResult,
     FieldCollectionStatus, RuntimeEnvironmentCollection,
 };
-use serde::Deserialize;
+#[cfg(any(windows, test))]
+use serde::{Deserialize, de::DeserializeOwned};
+#[cfg(any(windows, test))]
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeEnvironmentCollectionResult {
@@ -12,14 +20,28 @@ pub struct RuntimeEnvironmentCollectionResult {
     pub status: CollectorResult,
 }
 
-#[derive(Debug, Deserialize)]
 struct Response {
     collection: RuntimeEnvironmentCollection,
     errors: Vec<CategoryError>,
 }
 
-#[derive(Debug, Deserialize)]
 struct CategoryError {
+    path: String,
+    code: String,
+    status: FieldCollectionStatus,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Deserialize)]
+struct RawResponse {
+    collection: Value,
+    #[serde(default)]
+    errors: Vec<ScriptError>,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Deserialize)]
+struct ScriptError {
     path: String,
     code: String,
     permission_denied: bool,
@@ -44,11 +66,7 @@ pub fn collect_runtime_environment() -> RuntimeEnvironmentCollectionResult {
                 .iter()
                 .map(|error| FieldCollectionResult {
                     path: error.path.clone(),
-                    status: if error.permission_denied {
-                        FieldCollectionStatus::PermissionDenied
-                    } else {
-                        FieldCollectionStatus::Failed
-                    },
+                    status: error.status,
                     code: error.code.clone(),
                     native_code: None,
                 })
@@ -95,7 +113,7 @@ pub fn collect_runtime_environment() -> RuntimeEnvironmentCollectionResult {
                 messages: vec![CollectionMessage {
                     code: failure.code.into(),
                     native_code: failure.native_code,
-                    message: Some(failure.message.into()),
+                    message: Some(failure.message),
                 }],
                 fields: vec![FieldCollectionResult {
                     path: "/runtime_environment".into(),
@@ -116,13 +134,107 @@ fn elapsed_ms(started: Instant) -> u64 {
 struct Failure {
     code: &'static str,
     native_code: Option<i64>,
-    message: &'static str,
+    message: String,
     status: FieldCollectionStatus,
 }
 
 #[cfg(any(windows, test))]
 fn parse_response(json: &[u8]) -> Result<Response, serde_json::Error> {
-    serde_json::from_slice(json)
+    let raw: RawResponse = serde_json::from_slice(json)?;
+    let mut errors = raw
+        .errors
+        .into_iter()
+        .map(|error| CategoryError {
+            path: error.path,
+            code: error.code,
+            status: if error.permission_denied {
+                FieldCollectionStatus::PermissionDenied
+            } else {
+                FieldCollectionStatus::Failed
+            },
+        })
+        .collect::<Vec<_>>();
+    let collection = RuntimeEnvironmentCollection {
+        services: parse_category::<Service>(&raw.collection, "services", &mut errors),
+        startup_applications: parse_category::<StartupApplication>(
+            &raw.collection,
+            "startup_applications",
+            &mut errors,
+        ),
+        installed_applications: parse_category::<InstalledApplication>(
+            &raw.collection,
+            "installed_applications",
+            &mut errors,
+        ),
+        running_processes: parse_category::<RunningProcess>(
+            &raw.collection,
+            "running_processes",
+            &mut errors,
+        ),
+        scheduled_tasks: parse_category::<ScheduledTask>(
+            &raw.collection,
+            "scheduled_tasks",
+            &mut errors,
+        ),
+    };
+    Ok(Response { collection, errors })
+}
+
+#[cfg(any(windows, test))]
+fn parse_category<T: DeserializeOwned>(
+    collection: &Value,
+    name: &str,
+    errors: &mut Vec<CategoryError>,
+) -> CategoryCollection<T> {
+    let base = format!("/runtime_environment/{name}");
+    let Some(category) = collection.get(name).and_then(Value::as_object) else {
+        errors.push(invalid_error(base, "runtime_environment_category_invalid"));
+        return CategoryCollection::default();
+    };
+    let truncated = match category.get("truncated") {
+        Some(Value::Bool(value)) => *value,
+        None => false,
+        Some(_) => {
+            errors.push(invalid_error(
+                format!("{base}/truncated"),
+                "runtime_environment_truncated_invalid",
+            ));
+            false
+        }
+    };
+    let items = match category.get("items") {
+        Some(Value::Null) | None => None,
+        Some(Value::Array(values)) => {
+            let mut items = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().cloned().enumerate() {
+                match serde_json::from_value(value) {
+                    Ok(item) => items.push(item),
+                    Err(_) => errors.push(invalid_error(
+                        format!("{base}/items/{index}"),
+                        "runtime_environment_item_invalid",
+                    )),
+                }
+            }
+            Some(items)
+        }
+        Some(_) => {
+            errors.push(invalid_error(
+                format!("{base}/items"),
+                "runtime_environment_items_invalid",
+            ));
+            None
+        }
+    };
+    CategoryCollection { items, truncated }
+}
+
+#[cfg(any(windows, test))]
+fn invalid_error(path: String, code: &str) -> CategoryError {
+    CategoryError {
+        path,
+        code: code.into(),
+        status: FieldCollectionStatus::InvalidValue,
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -146,21 +258,26 @@ mod platform {
             .map_err(|error| Failure {
                 code: "runtime_environment_process_failed",
                 native_code: error.raw_os_error().map(i64::from),
-                message: "Windows PowerShellを開始できませんでした",
+                message: "Windows PowerShellを開始できませんでした".into(),
                 status: FieldCollectionStatus::Failed,
             })?;
         if !output.status.success() {
             return Err(Failure {
                 code: "runtime_environment_query_failed",
                 native_code: output.status.code().map(i64::from),
-                message: "常駐・自動実行環境を取得できませんでした",
+                message: "常駐・自動実行環境を取得できませんでした".into(),
                 status: FieldCollectionStatus::Failed,
             });
         }
-        parse_response(&output.stdout).map_err(|_| Failure {
+        parse_response(&output.stdout).map_err(|error| Failure {
             code: "runtime_environment_invalid_output",
             native_code: None,
-            message: "常駐・自動実行環境の応答を解析できませんでした",
+            message: format!(
+                "常駐・自動実行環境のJSON文書を解析できませんでした（{:?}, {}行{}列）",
+                error.classify(),
+                error.line(),
+                error.column()
+            ),
             status: FieldCollectionStatus::InvalidValue,
         })
     }
@@ -173,7 +290,7 @@ mod platform {
         Err(Failure {
             code: "runtime_environment_unsupported_platform",
             native_code: None,
-            message: "Windows以外では常駐・自動実行環境を収集できません",
+            message: "Windows以外では常駐・自動実行環境を収集できません".into(),
             status: FieldCollectionStatus::Unsupported,
         })
     }
@@ -187,7 +304,24 @@ mod tests {
         let response = parse_response(br#"{"collection":{"services":{"items":[],"truncated":false},"startup_applications":{"items":null,"truncated":false},"installed_applications":{"items":[],"truncated":false},"running_processes":{"items":[],"truncated":false},"scheduled_tasks":{"items":[],"truncated":false}},"errors":[{"path":"/runtime_environment/startup_applications/items","code":"startup_query_failed","permission_denied":true}]}"#).unwrap();
         assert_eq!(response.collection.services.items, Some(vec![]));
         assert!(response.collection.startup_applications.items.is_none());
-        assert!(response.errors[0].permission_denied);
+        assert_eq!(
+            response.errors[0].status,
+            FieldCollectionStatus::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn preserves_valid_items_and_other_categories_when_one_item_is_invalid() {
+        let response = parse_response(br#"{"collection":{"services":{"items":[{"name":"valid","display_name":null,"description":null,"state":"Running","start_mode":"Auto","command_line":null,"account":null,"process_id":10,"dependencies":[],"binary":{"executable_path":null,"publisher":null,"signature_status":null,"sha256":null,"file_exists":null}},{"name":"invalid","display_name":null,"description":null,"state":"Running","start_mode":"Auto","command_line":null,"account":null,"process_id":"not-a-number","dependencies":[],"binary":{"executable_path":null,"publisher":null,"signature_status":null,"sha256":null,"file_exists":null}}],"truncated":false},"startup_applications":{"items":[],"truncated":false},"installed_applications":{"items":[],"truncated":false},"running_processes":{"items":[],"truncated":false},"scheduled_tasks":{"items":[],"truncated":false}},"errors":[]}"#).unwrap();
+
+        let services = response.collection.services.items.unwrap();
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].name, "valid");
+        assert_eq!(response.collection.startup_applications.items, Some(vec![]));
+        assert!(response.errors.iter().any(|error| {
+            error.path == "/runtime_environment/services/items/1"
+                && error.status == FieldCollectionStatus::InvalidValue
+        }));
     }
     #[test]
     fn script_uses_read_only_sources_and_redacts_secret_arguments() {
