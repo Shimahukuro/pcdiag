@@ -10,6 +10,7 @@ publish.workspace = true
 pcdiag-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde_path_to_error.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [

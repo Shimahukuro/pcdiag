@@ -12,7 +12,7 @@ Windowsでは各ワーカーを専用のJob Objectへ割り当て、`JOB_OBJECT_
 |---|---:|
 | `windows`、`clock`、`cpu`、`firmware`、`memory` | 10秒 |
 | `gpu`、`devices`、`physical_disks`、`partitions`、`volumes`、`smart` | 30秒 |
-| `windows_updates`、`event_logs` | 120秒 |
+| `windows_updates`、`event_logs`、`runtime_environment` | 120秒 |
 
 制限時間にはワーカープロセスの起動、収集、結果のシリアライズおよび終了に要する時間を含む。
 
@@ -50,7 +50,7 @@ pcdiag.exe collect --output results `
 
 ## Windows実機確認
 
-最初にReleaseビルドで通常の`collect`を実行し、13コレクターの結果と処理時間が`status.json`へ記録されることを確認する。
+最初にReleaseビルドで通常の`collect`を実行し、14コレクターの結果と処理時間が`status.json`へ記録されることを確認する。
 
 タイムアウトは、デバッグビルド限定の遅延フックを使って再現する。Releaseビルドにはこのフックの環境変数を読み取るコードが含まれず、通常利用者向けのCLIオプションにも公開しない。
 

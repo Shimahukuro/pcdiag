@@ -74,7 +74,14 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
   },
   "firmware": {},
   "devices": [],
-  "gpus": []
+  "gpus": [],
+  "runtime_environment": {
+    "services": {"items": [], "truncated": false},
+    "startup_applications": {"items": [], "truncated": false},
+    "installed_applications": {"items": [], "truncated": false},
+    "running_processes": {"items": [], "truncated": false},
+    "scheduled_tasks": {"items": [], "truncated": false}
+  }
 }
 ```
 
@@ -116,6 +123,14 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
 - `operation`と`result`は安定した列挙値へ正規化し、未認識の値は`unknown`とする。元の数値は`operation_code`と`result_code`に保持する。
 - KB番号はタイトルから抽出できた値を大文字で保存し、取得できない場合は空配列とする。
 - 期間による切り捨ては`windows_update_history_truncated_by_date`、件数による切り捨ては`windows_update_history_truncated_by_count`として`status.json`へ記録する。
+
+### 常駐・自動実行環境
+
+`runtime_environment`は、サービス、スタートアップアプリ、インストール済みアプリ、実行中プロセス、スケジュール済みタスクを保持する。各カテゴリの`items`は、列挙成功で0件なら空配列、列挙不能なら`null`とする。`truncated`は最大5,000件を超えたため省略が発生したことを表す。
+
+実行ファイルを参照する項目は、共通の`binary`オブジェクトに正規化済みパス、発行元、署名状態、SHA-256、ファイルの存在状態を持つ。同じファイルを複数カテゴリ間で比較できる。取得できない個別属性は`null`とし、カテゴリ全体を失敗させない。
+
+このカテゴリは観測事実だけを表す。停止中、無効、発行元不明、署名不明などを、それだけで異常とは判定しない。カテゴリの取得失敗・権限不足は`runtime_environment`コレクターの`fields`にJSON Pointerと理由を記録する。
 
 ## status.json
 

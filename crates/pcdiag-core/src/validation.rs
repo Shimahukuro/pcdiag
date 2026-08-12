@@ -2145,6 +2145,7 @@ mod tests {
                 volumes: Some(vec![]),
                 smart: Some(vec![]),
             },
+            runtime_environment: Default::default(),
         }
     }
 
@@ -2179,6 +2180,7 @@ mod tests {
                 volumes: Some(vec![]),
                 smart: Some(vec![]),
             },
+            runtime_environment: Default::default(),
         }
     }
 

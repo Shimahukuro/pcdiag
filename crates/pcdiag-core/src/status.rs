@@ -16,6 +16,7 @@ pub enum CollectorName {
     Partitions,
     Volumes,
     Smart,
+    RuntimeEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
