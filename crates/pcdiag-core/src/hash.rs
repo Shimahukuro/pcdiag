@@ -23,7 +23,7 @@ pub fn sha256_hex(input: &[u8]) -> String {
     }
     padded.extend_from_slice(&bit_len.to_be_bytes());
     let mut state = INITIAL;
-    for chunk in padded.chunks_exact(64) {
+    for chunk in padded.as_chunks::<64>().0 {
         let mut words = [0u32; 64];
         for (index, word) in words[..16].iter_mut().enumerate() {
             let offset = index * 4;

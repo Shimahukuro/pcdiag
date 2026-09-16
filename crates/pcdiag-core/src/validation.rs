@@ -603,6 +603,7 @@ impl Collection {
 
     pub fn validate_with_status(&self, status: &CollectionStatus) -> Result<(), ValidationErrors> {
         let mut errors = self.validate().err().map_or_else(Vec::new, |e| e.0);
+        validate_windows_security_status(self, status, &mut errors);
         let windows_collectors: Vec<_> = status
             .collectors
             .iter()
@@ -817,6 +818,111 @@ impl Collection {
             }
         }
         finish(errors)
+    }
+}
+
+fn validate_windows_security_status(
+    collection: &Collection,
+    status: &CollectionStatus,
+    errors: &mut Vec<ValidationError>,
+) {
+    let collectors: Vec<_> = status
+        .collectors
+        .iter()
+        .filter(|collector| collector.name == CollectorName::WindowsSecurity)
+        .collect();
+    if collectors.len() > 1 {
+        push_error(
+            errors,
+            "/collectors",
+            "duplicate Windows security collector",
+        );
+        return;
+    }
+    let Some(data) = &collection.windows_security else {
+        if !collectors.is_empty() {
+            push_error(
+                errors,
+                "/windows_security",
+                "Windows security collector requires a collection object",
+            );
+        }
+        return; // Older artifacts omit both data and collector status.
+    };
+    let Some(collector) = collectors.first() else {
+        push_error(
+            errors,
+            "/collectors",
+            "Windows security collection requires collector status",
+        );
+        return;
+    };
+    let value = serde_json::to_value(data).expect("security model must serialize");
+    if !data.details.is_empty() {
+        for &(key, _, _) in crate::WindowsSecurityCollection::DETAIL_FIELDS {
+            if !data.details.contains_key(key) {
+                push_error(
+                    errors,
+                    format!("/windows_security/details/{key}"),
+                    "security details must include each known field, or omit the entire extension for older artifacts",
+                );
+            }
+        }
+    }
+    let mut null_paths = Vec::new();
+    collect_null_paths(&value, "/windows_security", &mut null_paths);
+    let security_field_count = 8 + data.details.len();
+    let valid_state = match collector.status {
+        CollectorStatus::Success => {
+            null_paths.is_empty()
+                && collector
+                    .messages
+                    .iter()
+                    .all(|message| message.code == "wsc_not_monitored")
+                && collector.fields.is_empty()
+        }
+        CollectorStatus::Partial => {
+            !null_paths.is_empty() && null_paths.len() < security_field_count
+        }
+        CollectorStatus::Failed | CollectorStatus::Skipped => {
+            null_paths.len() == security_field_count && !collector.messages.is_empty()
+        }
+    };
+    if !valid_state {
+        push_error(
+            errors,
+            "/collectors/windows_security/status",
+            "security collector status does not match available values or reasons",
+        );
+    }
+    let mut paths = std::collections::HashSet::new();
+    for field in &collector.fields {
+        if !null_paths.contains(&field.path) {
+            push_error(
+                errors,
+                &field.path,
+                "security field reason must refer to an unavailable security value",
+            );
+        }
+        if !paths.insert(&field.path) || field.code.is_empty() {
+            push_error(
+                errors,
+                &field.path,
+                "security field reasons must be unique and include a code",
+            );
+        }
+    }
+    // Worker-level timeout/crash has one collector reason and no per-field results.
+    if collector.status == CollectorStatus::Partial || !collector.fields.is_empty() {
+        for path in null_paths {
+            if !collector.fields.iter().any(|field| field.path == path) {
+                push_error(
+                    errors,
+                    path,
+                    "unavailable security value requires a field reason",
+                );
+            }
+        }
     }
 }
 
@@ -2116,6 +2222,7 @@ mod tests {
 
     fn complete_collection() -> Collection {
         Collection {
+            windows_security: None,
             windows: windows_collection(),
             windows_updates: Default::default(),
             clock: clock_collection(),
@@ -2151,6 +2258,7 @@ mod tests {
 
     fn null_collection() -> Collection {
         Collection {
+            windows_security: None,
             windows: windows_collection(),
             windows_updates: Default::default(),
             clock: clock_collection(),

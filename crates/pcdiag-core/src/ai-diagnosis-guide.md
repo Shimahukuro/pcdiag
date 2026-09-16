@@ -1,7 +1,7 @@
 ---
 document_type: pcdiag_ai_diagnosis_guide
-guide_version: 1.0.0
-artifact_schema_version: "2.1"
+guide_version: 1.1.0
+artifact_schema_version: "2.3"
 compatible_rule_sets:
   - name: pcdiag_builtin
     version: 0.8.0
@@ -140,7 +140,7 @@ compatible_rule_sets:
 
 ### 要求可能なcollectionパスカタログ
 
-このカタログは`artifact_schema_version: 2.0`用です。`*`は実在する配列要素番号に置換します。実在する番号を確認できない場合は番号を創作せず、必要な情報の種類を説明してください。
+このカタログは`artifact_schema_version: 2.3`用です。`windows_security`は2.2で追加した任意カテゴリで、2.3では`details`に個別機能の状態を追加しました。旧成果物に存在しない場合は未収集として扱います。`*`は実在する配列要素番号に置換します。実在する番号を確認できない場合は番号を創作せず、必要な情報の種類を説明してください。
 
 | パス | collector | 用途 |
 |---|---|---|
@@ -155,6 +155,14 @@ compatible_rule_sets:
 | `/storage/disks` | `physical_disks` | 物理ディスク構成とバス種別 |
 | `/storage/smart` | `smart` | SMARTおよびNVMeヘルス情報 |
 | `/storage/volumes/*` | `volumes` | ボリューム容量、空き容量、マウントポイント |
+| `/windows_security/firewall`、`/windows_security/automatic_updates`、`/windows_security/antivirus` | `windows_security` | Windowsが報告する保護カテゴリの状態 |
+| `/windows_security/internet_settings`、`/windows_security/user_account_control`、`/windows_security/security_center_service` | `windows_security` | Windowsが報告する設定・サービスの集約状態 |
+| `/windows_security/memory_integrity` | `windows_security` | HVCIの構成状態と実行状態の確認 |
+| `/windows_security/details/*` | `windows_security` | SAC・Defender・ファイアウォール・TPMなどの個別状態。文字列のfalseやdisabledも取得成功。nullは未取得で、statusの理由を確認する。Exploit protectionのNOTSETを無効と解釈しない |
+
+Windows セキュリティには現在の組み込み診断規則がなく、HTMLの`poor`／`snooze`注意表示は`diagnosis.json`の総合判定に含まれません。カテゴリの`good`をPC全体の正常と解釈せず、`poor`／`snooze`から特定の製品・設定を推測しないでください。`not_monitored`は未監視、`null`は未取得であり、保護無効や正常を意味しません。`status.json`の`windows_security`と対象パスの理由を確認し、`wsc_service_not_running`を保護カテゴリの`poor`と混同しないでください。
+
+HVCIの`configured`（`enabled`／`disabled`）と`running`（`running`／`not_running`）は独立した観測値です。有効であることだけからアプリやドライバーの不具合原因と判定したり、無効化を提案したりしてはいけません。関連する症状がある場合だけ、このカテゴリを追加情報として確認し、Windows セキュリティの該当画面や製品の互換性情報の確認を案内してください。存在しない診断規則IDや根拠を作らないでください。
 
 イベントログや配列全体には機器識別情報や利用者に関係する情報が含まれる可能性があります。診断と関係する最小範囲だけを要求し、必要性を利用者へ説明してください。
 

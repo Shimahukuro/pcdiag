@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum CollectorName {
     Windows,
     WindowsUpdates,
+    WindowsSecurity,
     Clock,
     Cpu,
     Firmware,

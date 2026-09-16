@@ -47,6 +47,6 @@ mod tests {
     fn guide_starts_with_machine_readable_metadata() {
         let guide = AI_DIAGNOSIS_GUIDE.replace("\r\n", "\n");
         assert!(guide.starts_with("---\ndocument_type: pcdiag_ai_diagnosis_guide\n"));
-        assert!(guide.contains("\nguide_version: 1.0.0\n"));
+        assert!(guide.contains("\nguide_version: 1.1.0\n"));
     }
 }

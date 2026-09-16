@@ -14,7 +14,10 @@ mod runtime_environment;
 mod smart;
 mod volumes;
 mod windows_info;
+mod windows_security;
 mod windows_updates;
+
+pub use windows_security::{WindowsSecurityCollectionResult, collect_windows_security};
 
 pub use clock::{ClockCollectionResult, collect_clock};
 pub use collect::{

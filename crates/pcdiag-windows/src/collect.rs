@@ -45,6 +45,8 @@ where
     check_cancelled!();
     let windows_updates = collect_windows_updates(windows_update_options);
     check_cancelled!();
+    let windows_security = crate::collect_windows_security();
+    check_cancelled!();
     let clock = collect_clock();
     check_cancelled!();
     let cpu = collect_cpu();
@@ -72,6 +74,7 @@ where
 
     Ok(CompleteCollectionResult {
         collection: Collection {
+            windows_security: Some(windows_security.collection),
             windows: windows.collection,
             windows_updates: windows_updates.collection,
             clock: clock.collection,
@@ -93,6 +96,7 @@ where
             collectors: vec![
                 windows.status,
                 windows_updates.status,
+                windows_security.status,
                 clock.status,
                 cpu.status,
                 firmware.status,
