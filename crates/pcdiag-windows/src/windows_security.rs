@@ -61,11 +61,14 @@ pub fn collect_windows_security() -> WindowsSecurityCollectionResult {
     let started = Instant::now();
     let health = PROVIDERS.map(platform::health);
     let device_guard = platform::device_guard();
-    build_result(
+    let mut result = build_result(
         health,
         device_guard,
         u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    )
+    );
+    collect_details(&mut result);
+    result.status.duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    result
 }
 
 fn build_result(
@@ -146,6 +149,7 @@ fn build_result(
     };
     WindowsSecurityCollectionResult {
         collection: WindowsSecurityCollection {
+            details: Default::default(),
             firewall: health.next().flatten(),
             automatic_updates: health.next().flatten(),
             antivirus: health.next().flatten(),
@@ -169,6 +173,55 @@ fn build_result(
             fields,
         },
     }
+}
+
+#[derive(Deserialize)]
+struct DetailObservation {
+    value: Option<String>,
+    status: Option<FieldCollectionStatus>,
+}
+
+fn collect_details(result: &mut WindowsSecurityCollectionResult) {
+    let raw = platform::details();
+    apply_details(result, raw);
+}
+
+fn apply_details(
+    result: &mut WindowsSecurityCollectionResult,
+    raw: Result<std::collections::BTreeMap<String, DetailObservation>, Failure>,
+) {
+    for &(key, _, _) in WindowsSecurityCollection::DETAIL_FIELDS {
+        let observation = raw.as_ref().ok().and_then(|values| values.get(key));
+        let value = observation
+            .and_then(|item| item.value.as_ref())
+            .filter(|value| {
+                !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+            });
+        let value = value.filter(|_| observation.is_some_and(|item| item.status.is_none()));
+        result.collection.details.insert(key.into(), value.cloned());
+        if value.is_none() {
+            let status = match &raw {
+                Err(failure) => failure.status,
+                Ok(_) => observation
+                    .and_then(|item| item.status)
+                    .unwrap_or(FieldCollectionStatus::InvalidValue),
+            };
+            result.status.fields.push(FieldCollectionResult {
+                path: format!("/windows_security/details/{key}"),
+                status,
+                code: "security_detail_unavailable".into(),
+                native_code: raw.as_ref().err().and_then(|failure| failure.native_code),
+            });
+        }
+    }
+    let missing = result.status.fields.len();
+    result.status.status = if missing == 0 {
+        CollectorStatus::Success
+    } else if missing == 8 + WindowsSecurityCollection::DETAIL_FIELDS.len() {
+        CollectorStatus::Failed
+    } else {
+        CollectorStatus::Partial
+    };
 }
 
 fn memory_integrity_present(services: Option<Vec<u32>>) -> Result<bool, Failure> {
@@ -243,6 +296,40 @@ mod platform {
         Foundation::{FreeLibrary, GetLastError},
         System::LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
     };
+
+    pub(super) fn details() -> Result<std::collections::BTreeMap<String, DetailObservation>, Failure>
+    {
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                include_str!("windows_security_details.ps1"),
+            ])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|error| {
+                Failure::new(
+                    FieldCollectionStatus::Failed,
+                    "security_details_process_failed",
+                    error.raw_os_error().map(i64::from),
+                )
+            })?;
+        if !output.status.success() {
+            return Err(Failure::new(
+                FieldCollectionStatus::Failed,
+                "security_details_process_failed",
+                output.status.code().map(i64::from),
+            ));
+        }
+        serde_json::from_slice(&output.stdout).map_err(|_| {
+            Failure::new(
+                FieldCollectionStatus::InvalidValue,
+                "security_details_invalid_output",
+                None,
+            )
+        })
+    }
 
     pub(super) fn health(provider: u32) -> Result<SecurityHealth, Failure> {
         // Load only the OS DLL. Missing WSC must not prevent the entire CLI from starting.
@@ -327,6 +414,10 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::*;
+    pub(super) fn details() -> Result<std::collections::BTreeMap<String, DetailObservation>, Failure>
+    {
+        Err(unsupported())
+    }
     pub(super) fn health(_: u32) -> Result<SecurityHealth, Failure> {
         Err(unsupported())
     }
@@ -348,6 +439,30 @@ mod tests {
 
     fn healthy() -> [Result<SecurityHealth, Failure>; 6] {
         std::array::from_fn(|_| Ok(SecurityHealth::Good))
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn powershell_details_normalize_mock_sources_without_sensitive_values() {
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/windows_security_details.ps1"),
+            )
+            .output()
+            .expect("PowerShell must start for the collector tests");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     fn device_guard() -> DeviceGuard {
         DeviceGuard {
@@ -524,8 +639,11 @@ mod tests {
     fn unsupported_platform_preserves_field_reasons_even_when_all_fail() {
         let result = collect_windows_security();
         assert_eq!(result.status.status, CollectorStatus::Failed);
-        assert_eq!(result.collection, WindowsSecurityCollection::default());
-        assert_eq!(result.status.fields.len(), 8);
+        assert!(result.collection.details.values().all(Option::is_none));
+        assert_eq!(
+            result.status.fields.len(),
+            8 + WindowsSecurityCollection::DETAIL_FIELDS.len()
+        );
         assert!(
             result
                 .status
@@ -533,5 +651,45 @@ mod tests {
                 .iter()
                 .all(|field| field.status == FieldCollectionStatus::Unsupported)
         );
+    }
+
+    #[test]
+    fn details_preserve_success_and_require_reasons_for_missing_or_invalid_values() {
+        let mut result = build_result(healthy(), Ok(device_guard()), 0);
+        let raw = serde_json::from_str(
+            r#"{
+            "smart_app_control": {"value":"evaluation","status":null},
+            "tpm_ready": {"value":null,"status":"permission_denied"},
+            "secure_boot": {"value":"false","status":null},
+            "signature_version": {"value":"bad\nvalue","status":null},
+            "secret": {"value":"must not persist","status":null}
+        }"#,
+        )
+        .unwrap();
+        apply_details(&mut result, Ok(raw));
+        assert_eq!(
+            result.collection.details["smart_app_control"].as_deref(),
+            Some("evaluation")
+        );
+        assert_eq!(
+            result.collection.details["secure_boot"].as_deref(),
+            Some("false")
+        );
+        assert!(result.collection.details["signature_version"].is_none());
+        assert!(!result.collection.details.contains_key("secret"));
+        assert_eq!(result.status.status, CollectorStatus::Partial);
+        let mut collection: pcdiag_core::Collection = serde_json::from_str(include_str!(
+            "../../pcdiag-core/tests/fixtures/memory-success-collection.json"
+        ))
+        .unwrap();
+        let mut status: pcdiag_core::CollectionStatus = serde_json::from_str(include_str!(
+            "../../pcdiag-core/tests/fixtures/memory-success-status.json"
+        ))
+        .unwrap();
+        collection.windows_security = Some(result.collection);
+        status.collectors.push(result.status);
+        collection.validate_with_status(&status).unwrap();
+        status.collectors.last_mut().unwrap().fields.pop();
+        assert!(collection.validate_with_status(&status).is_err());
     }
 }

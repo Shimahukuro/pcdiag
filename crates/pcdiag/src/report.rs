@@ -284,7 +284,34 @@ fn render_windows_security(html: &mut String, data: &Collection, status: &Collec
         false,
         status,
     );
-    html.push_str("</table><p>Win32_DeviceGuardの構成状態と実行状態は独立した観測値です。有効であることだけではアプリやドライバーの不具合原因とは判定できません。関連する症状がある場合は、Windows セキュリティの「デバイス セキュリティ → コア分離」と製品の互換性情報を確認してください。設定の無効化は提案しません。</p></details></section>");
+    html.push_str("</table><p>Win32_DeviceGuardの構成状態と実行状態は独立した観測値です。有効であることだけではアプリやドライバーの不具合原因とは判定できません。設定の無効化は提案しません。</p>");
+    html.push_str("<h3>個別機能の状態</h3><p>Defender の値は他社製品の状態を表しません。Exploit protection の NOTSET は明示設定なしであり、無効とは限りません。未取得は保護無効・正常のどちらも意味しません。日時はUTCです。</p><table><tr><th>項目</th><th>状態 / 値</th><th>根拠 / 未取得理由</th></tr>");
+    for &(key, category, label) in pcdiag_core::WindowsSecurityCollection::DETAIL_FIELDS {
+        let value = security.details.get(key).and_then(|value| value.as_deref());
+        let display = match value {
+            Some("enabled") => "有効 (enabled)",
+            Some("disabled") => "無効 (disabled)",
+            Some("evaluation") => "評価モード (evaluation)",
+            Some("audit") => "監査モード (audit)",
+            Some("true") => "はい (true)",
+            Some("false") => "いいえ (false)",
+            Some(value) => value,
+            None if !security.details.contains_key(key) => {
+                "未収集（旧成果物またはコレクター未完了）"
+            }
+            None => "未取得",
+        };
+        render_security_row(
+            html,
+            &format!("{category}: {label}"),
+            display,
+            &format!("/windows_security/details/{key}"),
+            value.is_none() && security.details.contains_key(key),
+            false,
+            status,
+        );
+    }
+    html.push_str("</table><h3>収集範囲の制限</h3><ul><li>アカウントの保護: Microsoft アカウント、Windows Hello、動的ロックのユーザー別状態は未収集です（機微情報オプションの対象）。UACとは別の項目です。</li><li>評価ベースの保護: SmartScreen・フィッシング防止などの画面全体の実効状態は未取得です。Defender PUA・ネットワーク保護の値だけでは代用できません。</li><li>デバイス セキュリティ: セキュア ブート証明書の更新完了、標準ハードウェア セキュリティの総合表示は未取得です。</li><li>デバイスのパフォーマンスと正常性: Windows セキュリティ独自の状態レポート・最終スキャン日時は未取得です。ストレージ・常駐ソフトウェア・時刻の観測情報は本レポートの各項目を参照してください。</li><li>ファミリーのオプション: クラウド上の家族構成・画面時間・活動レポートは未収集です。</li><li>保護の履歴・許可された脅威: 個別履歴は未収集です（機微情報オプションの対象）。アクティブな脅威の件数は保護履歴全体の件数ではありません。</li><li>スキャンの検査ファイル数・検出数・所要時間、OneDriveのランサムウェア復旧設定は未収集です。</li></ul></details></section>");
 }
 
 fn render_security_row(
@@ -1521,6 +1548,35 @@ mod tests {
         ] {
             assert!(html.contains(text), "missing {text}");
         }
+    }
+
+    #[test]
+    fn security_details_distinguish_evaluation_false_and_unavailable_and_escape_values() {
+        let (mut collection, _) = loaded_inputs();
+        let mut security: pcdiag_core::WindowsSecurityCollection = serde_json::from_str(
+            include_str!("../../pcdiag-core/tests/fixtures/windows-security.json"),
+        )
+        .unwrap();
+        security
+            .details
+            .insert("smart_app_control".into(), Some("evaluation".into()));
+        security
+            .details
+            .insert("secure_boot".into(), Some("false".into()));
+        security.details.insert(
+            "signature_version".into(),
+            Some("<script>test</script>".into()),
+        );
+        security.details.insert("tpm_ready".into(), None);
+        collection.collection.windows_security = Some(security);
+        let mut html = String::new();
+        render_windows_security(&mut html, &collection.collection, &collection.status);
+        assert!(html.contains("評価モード (evaluation)"));
+        assert!(html.contains("いいえ (false)"));
+        assert!(html.contains("&lt;script&gt;test&lt;/script&gt;"));
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("未収集（旧成果物またはコレクター未完了）"));
+        assert!(html.contains("収集範囲の制限"));
     }
 
     #[test]

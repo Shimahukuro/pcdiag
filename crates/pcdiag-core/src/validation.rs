@@ -858,8 +858,20 @@ fn validate_windows_security_status(
         return;
     };
     let value = serde_json::to_value(data).expect("security model must serialize");
+    if !data.details.is_empty() {
+        for &(key, _, _) in crate::WindowsSecurityCollection::DETAIL_FIELDS {
+            if !data.details.contains_key(key) {
+                push_error(
+                    errors,
+                    format!("/windows_security/details/{key}"),
+                    "security details must include each known field, or omit the entire extension for older artifacts",
+                );
+            }
+        }
+    }
     let mut null_paths = Vec::new();
     collect_null_paths(&value, "/windows_security", &mut null_paths);
+    let security_field_count = 8 + data.details.len();
     let valid_state = match collector.status {
         CollectorStatus::Success => {
             null_paths.is_empty()
@@ -869,9 +881,11 @@ fn validate_windows_security_status(
                     .all(|message| message.code == "wsc_not_monitored")
                 && collector.fields.is_empty()
         }
-        CollectorStatus::Partial => !null_paths.is_empty() && null_paths.len() < 8,
+        CollectorStatus::Partial => {
+            !null_paths.is_empty() && null_paths.len() < security_field_count
+        }
         CollectorStatus::Failed | CollectorStatus::Skipped => {
-            null_paths.len() == 8 && !collector.messages.is_empty()
+            null_paths.len() == security_field_count && !collector.messages.is_empty()
         }
     };
     if !valid_state {
