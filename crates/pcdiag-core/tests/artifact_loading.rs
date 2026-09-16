@@ -26,6 +26,26 @@ fn loads_and_validates_collection_artifact() {
 }
 
 #[test]
+fn loads_previous_minor_without_windows_security() {
+    let directory = create_artifact();
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: ArtifactManifest =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.artifact_schema_version = "2.1".into();
+    fs::write(
+        &manifest_path,
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let loaded = load_collection_artifact(&directory).unwrap();
+    assert!(loaded.collection.windows_security.is_none());
+    diagnose_collection(&loaded.collection)
+        .validate_against(&loaded.collection)
+        .unwrap();
+    remove(directory);
+}
+
+#[test]
 fn rejects_modified_declared_file() {
     let directory = create_artifact();
     fs::write(directory.join("collection.json"), b"{}\n").unwrap();
@@ -64,7 +84,7 @@ fn reports_the_actual_and_supported_schema_versions() {
     let manifest_path = directory.join("manifest.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-    manifest["artifact_schema_version"] = serde_json::json!("2.2");
+    manifest["artifact_schema_version"] = serde_json::json!("2.3");
     fs::write(
         &manifest_path,
         serde_json::to_vec_pretty(&manifest).unwrap(),
@@ -74,8 +94,8 @@ fn reports_the_actual_and_supported_schema_versions() {
     let error = load_collection_artifact(&directory).unwrap_err();
 
     assert!(error.path.ends_with("manifest.json"));
-    assert!(error.message.contains("\"2.2\" is unsupported"));
-    assert!(error.message.contains("2.0 through 2.1"));
+    assert!(error.message.contains("\"2.3\" is unsupported"));
+    assert!(error.message.contains("2.0 through 2.2"));
     remove(directory);
 }
 

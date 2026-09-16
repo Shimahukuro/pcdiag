@@ -40,7 +40,7 @@ pcdiag-<日時>-<表示用ID>/
 ```json
 {
   "manifest_schema_version": "1.0",
-  "artifact_schema_version": "2.1",
+  "artifact_schema_version": "2.2",
   "session_id": "a3f17c92-d604-4be8-9ea7-6ab7b92e41c5",
   "artifact_id": "831d1074-1145-4a66-bfa2-169903866adb",
   "artifact_type": "collection",
@@ -94,7 +94,7 @@ pcdiag-<日時>-<表示用ID>/
 マニフェストが管理する主成果物のデータ形式を表す。
 
 ```json
-"artifact_schema_version": "2.1"
+"artifact_schema_version": "2.2"
 ```
 
 対象例:
@@ -111,7 +111,7 @@ pcdiag-<日時>-<表示用ID>/
 ```json
 {
   "manifest_schema_version": "1.0",
-  "artifact_schema_version": "2.1",
+  "artifact_schema_version": "2.2",
   "tool": {
     "name": "pcdiag",
     "version": "0.1.0"
@@ -126,6 +126,8 @@ pcdiag-<日時>-<表示用ID>/
 `2.0`では、GPUおよび接続デバイスの`device_state.enabled`を、Windowsの`DN_STARTED`が表す意味に合わせて`device_state.started`へ変更した。この変更には後方互換性がないため、`artifact_schema_version == 1.0`の成果物は`2.0`対応実装への入力として受理しない。
 
 `2.1`では、後方互換な任意カテゴリとして`runtime_environment`を追加した。サービス、スタートアップアプリ、インストール済みアプリ、実行中プロセス、スケジュール済みタスクを保持する。`2.0`成果物ではこのカテゴリを未取得として扱う。
+
+`2.2`では、任意カテゴリ`windows_security`と同名のコレクター列挙値を追加した。Windows Security Centerの6カテゴリとHVCIの構成・実行状態を保持する。現在の出力スキーマは`2.2`であり、`2.0`／`2.1`成果物も読み込める。カテゴリがない旧成果物は未収集として扱い、保護状態を補完しない。
 
 ### 更新条件
 

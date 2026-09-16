@@ -3,7 +3,7 @@ use std::{collections::HashSet, fmt};
 use serde::{Deserialize, Serialize};
 
 pub const CURRENT_MANIFEST_SCHEMA_VERSION: &str = "1.0";
-pub const CURRENT_ARTIFACT_SCHEMA_VERSION: &str = "2.1";
+pub const CURRENT_ARTIFACT_SCHEMA_VERSION: &str = "2.2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SchemaVersion {
@@ -432,17 +432,17 @@ mod tests {
             error.path == "/artifact_schema_version"
                 && error
                     .message
-                    .contains("supported versions are 2.0 through 2.1")
+                    .contains("supported versions are 2.0 through 2.2")
         }));
     }
 
     #[test]
     fn rejects_future_minor_and_malformed_schema_versions_with_details() {
         let mut future = manifest();
-        future.artifact_schema_version = "2.2".into();
+        future.artifact_schema_version = "2.3".into();
         let error = future.validate().unwrap_err().to_string();
-        assert!(error.contains("\"2.2\" is unsupported"));
-        assert!(error.contains("2.0 through 2.1"));
+        assert!(error.contains("\"2.3\" is unsupported"));
+        assert!(error.contains("2.0 through 2.2"));
 
         for malformed in ["2", "2.0.1", "v2.0", "02.0", "2.00", ""] {
             let mut value = manifest();
@@ -469,6 +469,9 @@ mod tests {
     fn validates_derived_artifact_version_order() {
         validate_artifact_version_dependency("2.0", "2.1").unwrap();
         validate_artifact_version_dependency("2.1", "2.1").unwrap();
+        validate_artifact_version_dependency("2.0", "2.2").unwrap();
+        validate_artifact_version_dependency("2.1", "2.2").unwrap();
+        assert!(validate_artifact_version_dependency("2.2", "2.1").is_err());
         assert!(validate_artifact_version_dependency("2.1", "2.0").is_err());
         assert!(validate_artifact_version_dependency("1.0", "2.0").is_err());
     }

@@ -188,6 +188,7 @@ fn render_html(
     render_findings(&mut html, result);
     render_event_logs(&mut html, data, result);
     render_windows_updates(&mut html, data);
+    render_windows_security(&mut html, data, &collection.status);
     render_runtime_environment(&mut html, data, &collection.status);
     render_system(&mut html, data);
     render_gpu(&mut html, data);
@@ -198,6 +199,149 @@ fn render_html(
     html.push_str("<footer class=\"artifact-notice\"><h2>成果物の取り扱いに関する注意</h2><p>この診断成果物には、診断に必要な端末情報、アカウント識別情報、ネットワーク情報、ファイルパス、イベント内容などが含まれる場合があります。保存先、共有範囲、保管期間、廃棄は担当者が管理してください。pcdiagは成果物を自動削除しません。</p></footer>");
     html.push_str("</main></body></html>\n");
     html
+}
+
+fn render_windows_security(html: &mut String, data: &Collection, status: &CollectionStatus) {
+    use pcdiag_core::{MemoryIntegrityConfiguration, MemoryIntegrityRunningState, SecurityHealth};
+    html.push_str("<section><h2>Windows セキュリティ</h2>");
+    let Some(security) = &data.windows_security else {
+        html.push_str(
+            "<p>未取得: この成果物にはWindowsセキュリティ情報がありません。</p></section>",
+        );
+        return;
+    };
+    html.push_str("<p>Windows Security Centerが報告するカテゴリ別の状態です。特定の製品・設定や不具合原因を特定するものではなく、診断概要の総合判定には含めません。</p><table><tr><th>カテゴリ</th><th>状態</th><th>根拠 / 未取得理由</th></tr>");
+    for (name, field, health) in [
+        ("ファイアウォール", "firewall", security.firewall),
+        (
+            "自動更新設定",
+            "automatic_updates",
+            security.automatic_updates,
+        ),
+        ("ウイルス対策", "antivirus", security.antivirus),
+        (
+            "インターネット設定",
+            "internet_settings",
+            security.internet_settings,
+        ),
+        (
+            "ユーザー アカウント制御（UAC）",
+            "user_account_control",
+            security.user_account_control,
+        ),
+        (
+            "Security Center サービス",
+            "security_center_service",
+            security.security_center_service,
+        ),
+    ] {
+        let (label, warning) = match health {
+            Some(SecurityHealth::Good) => ("良好 (good)", false),
+            Some(SecurityHealth::Poor) => ("要確認 (poor)", true),
+            Some(SecurityHealth::Snooze) => ("保護の一時停止 (snooze)", true),
+            Some(SecurityHealth::NotMonitored) => ("未監視 (not_monitored)", false),
+            None => ("未取得", false),
+        };
+        render_security_row(
+            html,
+            name,
+            label,
+            &format!("/windows_security/{field}"),
+            health.is_none(),
+            warning,
+            status,
+        );
+    }
+    html.push_str("</table><p>要確認・保護の一時停止の場合は、Windows セキュリティの該当画面と組織の管理方針を確認してください。未監視・未取得は、正常とも保護無効とも判定できません。</p><h3>コア分離: メモリ整合性（HVCI）</h3><table><tr><th>項目</th><th>状態</th><th>根拠 / 未取得理由</th></tr>");
+    let memory = &security.memory_integrity;
+    let configured = match memory.configured {
+        Some(MemoryIntegrityConfiguration::Enabled) => "有効に構成 (enabled)",
+        Some(MemoryIntegrityConfiguration::Disabled) => "無効に構成 (disabled)",
+        None => "未取得",
+    };
+    let running = match memory.running {
+        Some(MemoryIntegrityRunningState::Running) => "動作中 (running)",
+        Some(MemoryIntegrityRunningState::NotRunning) => "非動作 (not_running)",
+        None => "未取得",
+    };
+    render_security_row(
+        html,
+        "構成状態",
+        configured,
+        "/windows_security/memory_integrity/configured",
+        memory.configured.is_none(),
+        false,
+        status,
+    );
+    render_security_row(
+        html,
+        "実行状態",
+        running,
+        "/windows_security/memory_integrity/running",
+        memory.running.is_none(),
+        false,
+        status,
+    );
+    html.push_str("</table><p>Win32_DeviceGuardの構成状態と実行状態は独立した観測値です。有効であることだけではアプリやドライバーの不具合原因とは判定できません。関連する症状がある場合は、Windows セキュリティの「デバイス セキュリティ → コア分離」と製品の互換性情報を確認してください。設定の無効化は提案しません。</p></section>");
+}
+
+fn render_security_row(
+    html: &mut String,
+    name: &str,
+    label: &str,
+    path: &str,
+    missing: bool,
+    warning: bool,
+    status: &CollectionStatus,
+) {
+    write!(
+        html,
+        "<tr><th>{}</th><td class=\"{}\">{}</td><td><code>{}</code>",
+        escape(name),
+        if warning { "warning" } else { "" },
+        escape(label),
+        escape(path)
+    )
+    .unwrap();
+    if missing {
+        if let Some(collector) = status
+            .collectors
+            .iter()
+            .find(|collector| collector.name == CollectorName::WindowsSecurity)
+        {
+            if let Some(field) = collector.fields.iter().find(|field| field.path == path) {
+                let reason = if field.code == "wsc_service_not_running" {
+                    "Security Center サービス停止のため未取得"
+                } else {
+                    match field.status {
+                        FieldCollectionStatus::PermissionDenied => "権限不足",
+                        FieldCollectionStatus::Unsupported => "非対応",
+                        FieldCollectionStatus::SourceNull => "情報源に値がありません",
+                        FieldCollectionStatus::Timeout => "タイムアウト",
+                        FieldCollectionStatus::InvalidValue => "応答値を解釈できません",
+                        _ => "取得できませんでした",
+                    }
+                };
+                write!(html, "<br>{reason} <code>{}</code>", escape(&field.code)).unwrap();
+                if let Some(code) = field.native_code {
+                    write!(html, " ({code})").unwrap();
+                }
+            } else {
+                for message in &collector.messages {
+                    write!(
+                        html,
+                        "<br>{} <code>{}</code>",
+                        escape(message.message.as_deref().unwrap_or("コレクター未完了")),
+                        escape(&message.code)
+                    )
+                    .unwrap();
+                }
+            }
+        } else {
+            html.push_str("<br>収集状態の記録がありません");
+        }
+    }
+    html.push_str("</td></tr>");
 }
 
 fn render_runtime_environment(html: &mut String, data: &Collection, status: &CollectionStatus) {
@@ -1348,6 +1492,68 @@ mod tests {
         ] {
             assert!(html.contains(label), "missing {label}");
         }
+    }
+
+    #[test]
+    fn renders_security_health_and_independent_memory_integrity_states() {
+        let (mut collection, diagnosis) = loaded_inputs();
+        collection.collection.windows_security = Some(
+            serde_json::from_str(include_str!(
+                "../../pcdiag-core/tests/fixtures/windows-security.json"
+            ))
+            .unwrap(),
+        );
+        let html = render_html(&collection, &diagnosis);
+        for text in [
+            "良好 (good)",
+            "要確認 (poor)",
+            "保護の一時停止 (snooze)",
+            "未監視 (not_monitored)",
+            "有効に構成 (enabled)",
+            "非動作 (not_running)",
+            "/windows_security/antivirus",
+            "総合判定には含めません",
+            "設定の無効化は提案しません",
+        ] {
+            assert!(html.contains(text), "missing {text}");
+        }
+    }
+
+    #[test]
+    fn renders_security_failure_reasons_and_escapes_untrusted_codes() {
+        let (mut collection, _) = loaded_inputs();
+        collection.collection.windows_security =
+            Some(pcdiag_core::WindowsSecurityCollection::default());
+        collection.status.collectors.push(serde_json::from_value(serde_json::json!({
+            "name":"windows_security", "status":"failed", "duration_ms":1, "messages":[{"code":"collector_timeout", "message":"<script>timeout</script>"}],
+            "fields":[
+                {"path":"/windows_security/firewall", "status":"not_collected", "code":"wsc_service_not_running", "native_code":1},
+                {"path":"/windows_security/antivirus", "status":"permission_denied", "code":"<script>code</script>"},
+                {"path":"/windows_security/memory_integrity/running", "status":"unsupported", "code":"device_guard_query_failed"}
+            ]
+        })).unwrap());
+        let mut html = String::new();
+        render_windows_security(&mut html, &collection.collection, &collection.status);
+        for text in [
+            "サービス停止のため未取得",
+            "権限不足",
+            "非対応",
+            "&lt;script&gt;code&lt;/script&gt;",
+            "&lt;script&gt;timeout&lt;/script&gt;",
+        ] {
+            assert!(html.contains(text), "missing {text}");
+        }
+        assert!(!html.contains("<script>"));
+        assert!(!html.contains("要確認 (poor)"));
+    }
+
+    #[test]
+    fn old_artifact_security_is_unavailable_instead_of_healthy() {
+        let (collection, _) = loaded_inputs();
+        let mut html = String::new();
+        render_windows_security(&mut html, &collection.collection, &collection.status);
+        assert!(html.contains("この成果物にはWindowsセキュリティ情報がありません"));
+        assert!(!html.contains("good"));
     }
 
     #[test]

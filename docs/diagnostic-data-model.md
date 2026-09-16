@@ -124,6 +124,33 @@ JSONファイル単体ではなく、`manifest.json`を含む成果物ディレ�
 - KB番号はタイトルから抽出できた値を大文字で保存し、取得できない場合は空配列とする。
 - 期間による切り捨ては`windows_update_history_truncated_by_date`、件数による切り捨ては`windows_update_history_truncated_by_count`として`status.json`へ記録する。
 
+### Windows セキュリティ
+
+成果物スキーマ`2.2`で、任意カテゴリ`windows_security`を追加する。`2.0`／`2.1`などカテゴリを持たない成果物は未収集として読み込み、保護状態を推測しない。新規収集では失敗時もオブジェクトを保存し、各値を明示的な`null`にする。
+
+```json
+{
+  "windows_security": {
+    "firewall": "good",
+    "automatic_updates": "poor",
+    "antivirus": "snooze",
+    "internet_settings": "not_monitored",
+    "user_account_control": "good",
+    "security_center_service": "good",
+    "memory_integrity": {
+      "configured": "enabled",
+      "running": "not_running"
+    }
+  }
+}
+```
+
+6カテゴリは`good`、`poor`、`snooze`、`not_monitored`、取得不能時は`null`。`memory_integrity.configured`は`enabled`／`disabled`／`null`、`running`は`running`／`not_running`／`null`とする。カテゴリ内のフィールドは必須で、取得不能は省略せず`null`を保存する。構成と実行は独立した観測値である。
+
+対応する`windows_security`コレクター結果を`status.json`に保存する。`partial`ではすべての`null`に理由パスを要求し、成功値に失敗理由を付けない。全項目失敗時も個別理由を保持するが、ワーカー全体のタイムアウト・異常終了ではコレクター単位の理由で代替する。重複コレクター、重複理由パス、データと成功・失敗状態の矛盾を拒否する。未監視は取得成功として扱い、`wsc_not_monitored`の情報メッセージも記録する。
+
+初期実装では診断規則を追加せず、`poor`／`snooze`をHTML内の注意として表示する。HVCI有効のみから原因を断定せず、無効化を提案しない。情報源、失敗コード、表示および実機確認は[Windows セキュリティ仕様](windows-security.md)を参照する。
+
 ### 常駐・自動実行環境
 
 `runtime_environment`は、サービス、スタートアップアプリ、インストール済みアプリ、実行中プロセス、スケジュール済みタスクを保持する。各カテゴリの`items`は、列挙成功で0件なら空配列、列挙不能なら`null`とする。`truncated`は最大5,000件を超えたため省略が発生したことを表す。

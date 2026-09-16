@@ -8,7 +8,13 @@ mod memory;
 mod physical_disk;
 mod runtime_environment;
 mod windows;
+mod windows_security;
 mod windows_update;
+
+pub use windows_security::{
+    MemoryIntegrity, MemoryIntegrityConfiguration, MemoryIntegrityRunningState, SecurityHealth,
+    WindowsSecurityCollection,
+};
 
 pub use cpu::{CpuCollection, CpuFeatures, CpuInstructionSet, CpuPackage, CpuTopology};
 pub use event_log::{EventLogCollection, EventLogEntry, EventLogLevel};
@@ -37,6 +43,9 @@ use self::memory::deserialize_required_nullable;
 ///
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Collection {
+    /// Absent in artifacts collected before Windows security support was added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_security: Option<WindowsSecurityCollection>,
     pub windows: WindowsCollection,
     pub windows_updates: WindowsUpdateCollection,
     pub clock: ClockCollection,

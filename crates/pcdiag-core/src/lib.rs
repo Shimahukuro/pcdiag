@@ -31,6 +31,10 @@ pub use collection::{
     VolumeExtent, WindowsCollection, WindowsServiceState, WindowsUpdateCollection,
     WindowsUpdateHistoryEntry, WindowsUpdateOperation, WindowsUpdateResult,
 };
+pub use collection::{
+    MemoryIntegrity, MemoryIntegrityConfiguration, MemoryIntegrityRunningState, SecurityHealth,
+    WindowsSecurityCollection,
+};
 pub use diagnosis::{
     Criterion, Diagnosis, DiagnosisSummary, EvaluationCounts, EvaluationReason, Evidence,
     FindingCounts, MeasurementUnit, Recommendation, RuleEvaluation, RuleEvaluationStatus,

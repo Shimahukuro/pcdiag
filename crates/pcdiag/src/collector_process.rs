@@ -18,9 +18,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MIN_TIMEOUT_SECONDS: u64 = 1;
 const MAX_TIMEOUT_SECONDS: u64 = 3_600;
 
-pub(crate) const COLLECTOR_ORDER: [CollectorName; 14] = [
+pub(crate) const COLLECTOR_ORDER: [CollectorName; 15] = [
     CollectorName::Windows,
     CollectorName::WindowsUpdates,
+    CollectorName::WindowsSecurity,
     CollectorName::Clock,
     CollectorName::Cpu,
     CollectorName::Firmware,
@@ -89,6 +90,7 @@ fn default_timeout(name: CollectorName) -> Duration {
         | CollectorName::Firmware
         | CollectorName::Memory => 10,
         CollectorName::EventLogs
+        | CollectorName::WindowsSecurity
         | CollectorName::WindowsUpdates
         | CollectorName::RuntimeEnvironment => 120,
         CollectorName::Gpu
@@ -104,6 +106,7 @@ pub(crate) fn collector_name(name: CollectorName) -> &'static str {
     match name {
         CollectorName::Windows => "windows",
         CollectorName::WindowsUpdates => "windows_updates",
+        CollectorName::WindowsSecurity => "windows_security",
         CollectorName::Clock => "clock",
         CollectorName::Cpu => "cpu",
         CollectorName::Firmware => "firmware",
@@ -157,6 +160,7 @@ pub(crate) fn collect_one(
             output!(pcdiag_windows::collect_windows_updates(windows_updates))
         }
         CollectorName::Clock => output!(pcdiag_windows::collect_clock()),
+        CollectorName::WindowsSecurity => output!(pcdiag_windows::collect_windows_security()),
         CollectorName::Cpu => output!(pcdiag_windows::collect_cpu()),
         CollectorName::Firmware => output!(pcdiag_windows::collect_firmware()),
         CollectorName::Memory => output!(pcdiag_windows::collect_memory()),
@@ -441,6 +445,10 @@ fn empty_collection(
     windows_updates: WindowsUpdateCollectionOptions,
 ) -> Value {
     match name {
+        CollectorName::WindowsSecurity => {
+            serde_json::to_value(pcdiag_core::WindowsSecurityCollection::default())
+                .expect("security model must serialize")
+        }
         CollectorName::Windows => json!({
             "edition": null, "version": null, "build_number": null,
             "architecture": null, "booted_at": null, "uptime_ms": null, "boot_mode": null
@@ -498,6 +506,7 @@ fn assemble(outputs: Vec<WorkerOutput>) -> Result<CompleteCollectionResult, serd
     let mut collection = json!({
         "windows": null,
         "windows_updates": null,
+        "windows_security": null,
         "clock": null,
         "cpu": null,
         "firmware": null,
@@ -513,6 +522,7 @@ fn assemble(outputs: Vec<WorkerOutput>) -> Result<CompleteCollectionResult, serd
         let path = match output.name {
             CollectorName::Windows => "/windows",
             CollectorName::WindowsUpdates => "/windows_updates",
+            CollectorName::WindowsSecurity => "/windows_security",
             CollectorName::Clock => "/clock",
             CollectorName::Cpu => "/cpu",
             CollectorName::Firmware => "/firmware",
@@ -778,10 +788,68 @@ mod tests {
             .unwrap();
         assert_eq!(result.status.collectors.len(), COLLECTOR_ORDER.len());
         assert_eq!(
-            result.status.collectors[5].messages[0].code,
+            result.status.collectors[6].messages[0].code,
             "collector_timeout"
         );
-        assert_eq!(result.status.collectors[6].name, CollectorName::Gpu);
+        assert_eq!(result.status.collectors[7].name, CollectorName::Gpu);
+    }
+
+    #[test]
+    fn security_worker_timeout_does_not_prevent_later_success() {
+        let options = WindowsUpdateCollectionOptions::default();
+        let mut outputs: Vec<_> = COLLECTOR_ORDER
+            .into_iter()
+            .map(|name| {
+                failure_output(
+                    name,
+                    30,
+                    options,
+                    Duration::from_secs(1),
+                    "collector_timeout",
+                    "timed out".into(),
+                )
+            })
+            .collect();
+        let last = outputs.last_mut().unwrap();
+        // A later collector succeeds even when the security worker cannot return any data.
+        last.collection = json!({
+            "services": {"items": [], "truncated": false},
+            "startup_applications": {"items": [], "truncated": false},
+            "installed_applications": {"items": [], "truncated": false},
+            "running_processes": {"items": [], "truncated": false},
+            "scheduled_tasks": {"items": [], "truncated": false}
+        });
+        last.status.status = CollectorStatus::Success;
+        last.status.messages.clear();
+        let result = assemble(outputs).unwrap();
+        result
+            .collection
+            .validate_with_status(&result.status)
+            .unwrap();
+        assert_eq!(
+            result.collection.windows_security,
+            Some(pcdiag_core::WindowsSecurityCollection::default())
+        );
+        assert_eq!(
+            result.status.collectors.last().unwrap().status,
+            CollectorStatus::Success
+        );
+        let mut timeouts = CollectorTimeouts::default();
+        assert_eq!(
+            timeouts
+                .timeout_for(CollectorName::WindowsSecurity)
+                .as_secs(),
+            120
+        );
+        timeouts
+            .set_from_cli(&OsString::from("windows_security=45"))
+            .unwrap();
+        assert_eq!(
+            timeouts
+                .timeout_for(CollectorName::WindowsSecurity)
+                .as_secs(),
+            45
+        );
     }
 
     #[cfg(debug_assertions)]
