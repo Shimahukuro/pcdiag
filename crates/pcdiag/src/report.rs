@@ -203,10 +203,12 @@ fn render_html(
 
 fn render_windows_security(html: &mut String, data: &Collection, status: &CollectionStatus) {
     use pcdiag_core::{MemoryIntegrityConfiguration, MemoryIntegrityRunningState, SecurityHealth};
-    html.push_str("<section><h2>Windows セキュリティ</h2>");
+    // Security observations can be lengthy and may need careful handling before sharing.
+    // Keep this optional section closed unless the report reader explicitly expands it.
+    html.push_str("<section><details><summary>Windows セキュリティ</summary>");
     let Some(security) = &data.windows_security else {
         html.push_str(
-            "<p>未取得: この成果物にはWindowsセキュリティ情報がありません。</p></section>",
+            "<p>未取得: この成果物にはWindowsセキュリティ情報がありません。</p></details></section>",
         );
         return;
     };
@@ -282,7 +284,7 @@ fn render_windows_security(html: &mut String, data: &Collection, status: &Collec
         false,
         status,
     );
-    html.push_str("</table><p>Win32_DeviceGuardの構成状態と実行状態は独立した観測値です。有効であることだけではアプリやドライバーの不具合原因とは判定できません。関連する症状がある場合は、Windows セキュリティの「デバイス セキュリティ → コア分離」と製品の互換性情報を確認してください。設定の無効化は提案しません。</p></section>");
+    html.push_str("</table><p>Win32_DeviceGuardの構成状態と実行状態は独立した観測値です。有効であることだけではアプリやドライバーの不具合原因とは判定できません。関連する症状がある場合は、Windows セキュリティの「デバイス セキュリティ → コア分離」と製品の互換性情報を確認してください。設定の無効化は提案しません。</p></details></section>");
 }
 
 fn render_security_row(
@@ -1504,6 +1506,8 @@ mod tests {
             .unwrap(),
         );
         let html = render_html(&collection, &diagnosis);
+        assert!(html.contains("<details><summary>Windows セキュリティ</summary>"));
+        assert!(!html.contains("<details open><summary>Windows セキュリティ</summary>"));
         for text in [
             "良好 (good)",
             "要確認 (poor)",
